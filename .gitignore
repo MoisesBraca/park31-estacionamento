@@ -12,3 +12,6 @@ Thumbs.db
 *.apk
 *.aab
 server/build/
+gradlew
+gradlew.bat
+gradle/
