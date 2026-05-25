@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Mapa de Vagas"
+            android:textSize="24sp"
+            android:textColor="@color/on_surface"
+            android:fontFamily="sans-serif-black"
+            android:layout_marginBottom="4dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="20dp">
+
+            <TextView
+                android:id="@+id/vagas_resumo"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text=""
+                android:textSize="14sp"
+                android:textColor="@color/text_secondary" />
+
+            <TextView
+                android:layout_width="10dp"
+                android:layout_height="10dp"
+                android:background="@color/success"
+                android:layout_marginEnd="4dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Livre"
+                android:textSize="11sp"
+                android:textColor="@color/text_secondary"
+                android:layout_marginEnd="12dp" />
+
+            <TextView
+                android:layout_width="10dp"
+                android:layout_height="10dp"
+                android:background="@color/danger"
+                android:layout_marginEnd="4dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Ocupada"
+                android:textSize="11sp"
+                android:textColor="@color/text_secondary"
+                android:layout_marginEnd="12dp" />
+
+            <TextView
+                android:layout_width="10dp"
+                android:layout_height="10dp"
+                android:background="@color/warning"
+                android:layout_marginEnd="4dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Lavagem"
+                android:textSize="11sp"
+                android:textColor="@color/text_secondary" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/vagas_section_carro"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="CARROS"
+            android:textSize="13sp"
+            android:textColor="@color/primary"
+            android:fontFamily="sans-serif-black"
+            android:letterSpacing="0.06"
+            android:layout_marginBottom="8dp"
+            android:visibility="gone" />
+
+        <GridLayout
+            android:id="@+id/grid_carros"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:columnCount="4"
+            android:alignmentMode="alignMargins"
+            android:columnOrderPreserved="false"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/vagas_section_moto"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="MOTOS"
+            android:textSize="13sp"
+            android:textColor="@color/primary"
+            android:fontFamily="sans-serif-black"
+            android:letterSpacing="0.06"
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="8dp"
+            android:visibility="gone" />
+
+        <GridLayout
+            android:id="@+id/grid_motos"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:columnCount="2"
+            android:alignmentMode="alignMargins"
+            android:columnOrderPreserved="false"
+            android:visibility="gone" />
+
+    </LinearLayout>
+</ScrollView>
