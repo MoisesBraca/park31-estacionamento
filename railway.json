@@ -1,7 +1,7 @@
 {
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "cd server && gradle clean build -x check -x test"
+    "rootDir": "server"
   },
   "deploy": {
     "startCommand": "cd server && java -jar build/libs/server.jar"
