@@ -6,7 +6,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class EstacionamentoRepository {
-    private static final String URL_CONEXAO = "jdbc:sqlite:C:/sqlite/db_estacionamento.db";
+    private static final String URL_CONEXAO;
+
+    static {
+        String dbPath = System.getenv("DB_PATH");
+        if (dbPath == null || dbPath.trim().isEmpty()) {
+            dbPath = "db_estacionamento.db";
+        }
+        URL_CONEXAO = "jdbc:sqlite:" + dbPath;
+    }
 
     public EstacionamentoRepository() {
         inicializarBanco();

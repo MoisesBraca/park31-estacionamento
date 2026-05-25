@@ -26,7 +26,6 @@ public abstract class AppDatabase extends RoomDatabase {
                     INSTANCE = Room.databaseBuilder(context.getApplicationContext(),
                                     AppDatabase.class, "estacionamento_db")
                             .addCallback(SEED_CALLBACK)
-                            .fallbackToDestructiveMigration()
                             .build();
                 }
             }
