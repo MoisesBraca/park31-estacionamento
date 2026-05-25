@@ -1,9 +1,9 @@
 {
   "build": {
-    "builder": "NIXPACKS",
-    "rootDir": "server"
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "server/Dockerfile"
   },
   "deploy": {
-    "startCommand": "cd server && java -jar build/libs/server.jar"
+    "startCommand": ""
   }
 }
