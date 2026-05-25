@@ -52,7 +52,15 @@ public class LicencaHelper {
 
         new Thread(() -> {
             try {
-                URL url = new URL("http://" + ip + ":8080/api/check");
+                String urlStr;
+                if (ip.contains("://")) {
+                    urlStr = ip + "/api/check";
+                } else if (ip.contains(".") && !ip.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
+                    urlStr = "https://" + ip + "/api/check";
+                } else {
+                    urlStr = "http://" + ip + ":8080/api/check";
+                }
+                URL url = new URL(urlStr);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("POST");
                 conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
