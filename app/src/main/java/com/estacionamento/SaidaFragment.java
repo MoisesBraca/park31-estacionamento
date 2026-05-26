@@ -72,11 +72,50 @@ public class SaidaFragment extends Fragment {
                     binding.cardSaidaAvaria.setVisibility(View.GONE);
                 }
 
-                // Check monthly subscriber status asynchronously
+                // Check monthly subscriber status and autoatendimento status asynchronously
                 new Thread(() -> {
                     try {
                         EstacionamentoRepository repo = EstacionamentoRepository.getInstance(requireActivity().getApplication());
                         Mensalista m = repo.obterMensalistaSync(veiculo.getPlaca());
+                        
+                        // Check autoatendimento payment status via server API
+                        boolean isWebPago = false;
+                        double valorWeb = 0.0;
+                        try {
+                            String ip = LicencaHelper.getServerIp(requireContext());
+                            String urlStr;
+                            if (ip.contains("://")) {
+                                urlStr = ip + "/api/autoatendimento/status?placa=" + veiculo.getPlaca();
+                            } else if (ip.contains(".") && !ip.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
+                                urlStr = "https://" + ip + "/api/autoatendimento/status?placa=" + veiculo.getPlaca();
+                            } else {
+                                urlStr = "http://" + ip + ":8080/api/autoatendimento/status?placa=" + veiculo.getPlaca();
+                            }
+                            java.net.URL url = new java.net.URL(urlStr);
+                            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                            conn.setRequestMethod("GET");
+                            conn.setConnectTimeout(2000);
+                            conn.setReadTimeout(2000);
+                            
+                            if (conn.getResponseCode() == 200) {
+                                java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+                                StringBuilder sb = new StringBuilder();
+                                String line;
+                                while ((line = br.readLine()) != null) {
+                                    sb.append(line);
+                                }
+                                org.json.JSONObject resp = new org.json.JSONObject(sb.toString());
+                                if ("PAGO".equals(resp.optString("status"))) {
+                                    isWebPago = true;
+                                    valorWeb = resp.optDouble("valor", 0.0);
+                                }
+                            }
+                            conn.disconnect();
+                        } catch (Exception ignored) {}
+
+                        final boolean finalIsWebPago = isWebPago;
+                        final double finalValorWeb = valorWeb;
+
                         if (getActivity() != null) {
                             getActivity().runOnUiThread(() -> {
                                 if (binding == null) return;
@@ -105,6 +144,17 @@ public class SaidaFragment extends Fragment {
                                         binding.rgPagamento.setVisibility(View.VISIBLE);
                                         binding.etSaidaValor.setEnabled(true);
                                     }
+                                } else if (finalIsWebPago) {
+                                    tarifaAtual = 0.0; // mark outstanding balance as zero since it's already paid!
+                                    binding.tvMensalistaSaidaBadge.setVisibility(View.VISIBLE);
+                                    binding.tvMensalistaSaidaBadge.setText("🟢 PAGO VIA AUTOATENDIMENTO (Saída Liberada)");
+                                    binding.tvMensalistaSaidaBadge.setBackgroundColor(androidx.core.content.ContextCompat.getColor(requireContext(), android.R.color.holo_green_dark));
+                                    
+                                    binding.rowValor.tvValue.setText("R$ " + String.format("%.2f", finalValorWeb) + " (PAGO WEB)");
+                                    binding.rowValor.tvValue.setTextColor(androidx.core.content.ContextCompat.getColor(requireContext(), android.R.color.holo_green_dark));
+                                    binding.etSaidaValor.setText("0.00");
+                                    binding.etSaidaValor.setEnabled(false);
+                                    binding.rgPagamento.setVisibility(View.GONE);
                                 } else {
                                     binding.tvMensalistaSaidaBadge.setVisibility(View.GONE);
                                     binding.rgPagamento.setVisibility(View.VISIBLE);
@@ -200,14 +250,27 @@ public class SaidaFragment extends Fragment {
         if (veiculoAtual == null) return;
 
         if (binding.tvMensalistaSaidaBadge.getVisibility() == View.VISIBLE) {
-            double valorPago = 0.0;
-            String valorStr = binding.etSaidaValor.getText().toString().trim().replace(",", ".");
-            if (!valorStr.isEmpty()) {
+            String badgeText = binding.tvMensalistaSaidaBadge.getText().toString();
+            if (badgeText.contains("AUTOATENDIMENTO")) {
+                // Paid via web. Retrieve original ticket value from rowValor text if possible
+                double originalTariff = 0.0;
+                String rowValorText = binding.rowValor.tvValue.getText().toString(); // e.g. "R$ 15.00 (PAGO WEB)"
                 try {
-                    valorPago = Double.parseDouble(valorStr);
+                    String cleanVal = rowValorText.replaceAll("[^0-9,.]", "").trim().replace(",", ".");
+                    originalTariff = Double.parseDouble(cleanVal);
                 } catch (Exception ignored) {}
+                
+                processarSaidaFinal(originalTariff, "AUTOATENDIMENTO");
+            } else {
+                double valorPago = 0.0;
+                String valorStr = binding.etSaidaValor.getText().toString().trim().replace(",", ".");
+                if (!valorStr.isEmpty()) {
+                    try {
+                        valorPago = Double.parseDouble(valorStr);
+                    } catch (Exception ignored) {}
+                }
+                processarSaidaFinal(valorPago, "CORTESIA MENSALISTA");
             }
-            processarSaidaFinal(valorPago, "CORTESIA MENSALISTA");
             return;
         }
 

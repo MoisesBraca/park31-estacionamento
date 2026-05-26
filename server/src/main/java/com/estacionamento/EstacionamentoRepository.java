@@ -77,6 +77,15 @@ public class EstacionamentoRepository {
                               + "  status TEXT DEFAULT 'ATIVO'"
                               + ");";
 
+        String sqlAutoatendimento = "CREATE TABLE IF NOT EXISTS autoatendimento ("
+                                  + "  placa TEXT PRIMARY KEY,"
+                                  + "  hora_entrada INTEGER NOT NULL,"
+                                  + "  hora_saida INTEGER,"
+                                  + "  valor_pago REAL,"
+                                  + "  status TEXT DEFAULT 'PENDENTE',"
+                                  + "  txid TEXT"
+                                  + ");";
+
         try (Connection conn = obterConexao();
              Statement stmt = conn.createStatement()) {
             stmt.execute(sqlVeiculos);
@@ -84,6 +93,7 @@ public class EstacionamentoRepository {
             stmt.execute(sqlConfig);
             stmt.execute(sqlTerminais);
             stmt.execute(sqlMensalistas);
+            stmt.execute(sqlAutoatendimento);
         } catch (SQLException e) {
             System.err.println("Erro ao inicializar o banco de dados SQLite: " + e.getMessage());
         }
@@ -562,5 +572,118 @@ public class EstacionamentoRepository {
             System.err.println("Erro ao listar todas transacoes: " + e.getMessage());
         }
         return lista;
+    }
+
+    public static class AutoatendimentoInfo {
+        private final String placa;
+        private final long horaEntrada;
+        private final long horaSaida;
+        private final double valorPago;
+        private final String status;
+        private final String txid;
+
+        public AutoatendimentoInfo(String placa, long horaEntrada, long horaSaida, double valorPago, String status, String txid) {
+            this.placa = placa;
+            this.horaEntrada = horaEntrada;
+            this.horaSaida = horaSaida;
+            this.valorPago = valorPago;
+            this.status = status;
+            this.txid = txid;
+        }
+
+        public String getPlaca() { return placa; }
+        public long getHoraEntrada() { return horaEntrada; }
+        public long getHoraSaida() { return horaSaida; }
+        public double getValorPago() { return valorPago; }
+        public String getStatus() { return status; }
+        public String getTxid() { return txid; }
+    }
+
+    public void registrarAutoatendimento(String placa, long horaEntrada, double valor, String status, String txid) throws IOException {
+        String sql = "INSERT OR REPLACE INTO autoatendimento (placa, hora_entrada, valor_pago, status, txid) VALUES (?, ?, ?, ?, ?);";
+        try (Connection conn = obterConexao();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, placa.toUpperCase().trim());
+            pstmt.setLong(2, horaEntrada);
+            pstmt.setDouble(3, valor);
+            pstmt.setString(4, status);
+            pstmt.setString(5, txid);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new IOException("Erro ao registrar autoatendimento: " + e.getMessage(), e);
+        }
+    }
+
+    public AutoatendimentoInfo obterAutoatendimento(String placa) throws IOException {
+        String sql = "SELECT placa, hora_entrada, hora_saida, valor_pago, status, txid FROM autoatendimento WHERE placa = ?;";
+        try (Connection conn = obterConexao();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, placa.toUpperCase().trim());
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return new AutoatendimentoInfo(
+                        rs.getString("placa"),
+                        rs.getLong("hora_entrada"),
+                        rs.getLong("hora_saida"),
+                        rs.getDouble("valor_pago"),
+                        rs.getString("status"),
+                        rs.getString("txid")
+                    );
+                }
+            }
+        } catch (SQLException e) {
+            throw new IOException("Erro ao obter autoatendimento: " + e.getMessage(), e);
+        }
+        return null;
+    }
+
+    public void atualizarStatusAutoatendimento(String placa, String status, double valorPago) throws IOException {
+        String sql = "UPDATE autoatendimento SET status = ?, hora_saida = ?, valor_pago = ? WHERE placa = ?;";
+        try (Connection conn = obterConexao();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, status);
+            pstmt.setLong(2, System.currentTimeMillis());
+            pstmt.setDouble(3, valorPago);
+            pstmt.setString(4, placa.toUpperCase().trim());
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new IOException("Erro ao atualizar status do autoatendimento: " + e.getMessage(), e);
+        }
+    }
+
+    public void atualizarStatusAutoatendimentoPorTxid(String txid, String status) throws IOException {
+        String sql = "UPDATE autoatendimento SET status = ?, hora_saida = ? WHERE txid = ?;";
+        try (Connection conn = obterConexao();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, status);
+            pstmt.setLong(2, System.currentTimeMillis());
+            pstmt.setString(3, txid);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new IOException("Erro ao atualizar status por txid: " + e.getMessage(), e);
+        }
+    }
+
+    public AutoatendimentoInfo obterAutoatendimentoPorTxid(String txid) throws IOException {
+        String sql = "SELECT placa, hora_entrada, hora_saida, valor_pago, status, txid FROM autoatendimento WHERE txid = ?;";
+        try (Connection conn = obterConexao();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, txid);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return new AutoatendimentoInfo(
+                        rs.getString("placa"),
+                        rs.getLong("hora_entrada"),
+                        rs.getLong("hora_saida"),
+                        rs.getDouble("valor_pago"),
+                        rs.getString("status"),
+                        rs.getString("txid")
+                    );
+                }
+            }
+        } catch (SQLException e) {
+            throw new IOException("Erro ao obter autoatendimento por txid: " + e.getMessage(), e);
+        }
+        return null;
     }
 }

@@ -81,12 +81,19 @@ public class EntradaFragment extends Fragment {
 
         viewModel.getEntradaState().observe(getViewLifecycleOwner(), state -> {
             if (state.isSuccess()) {
+                String placaRegistrada = binding.etEntradaPlaca.getText().toString().trim().toUpperCase();
+                long ts = System.currentTimeMillis();
+                
                 showSnackbar("Entrada registrada!");
                 binding.etEntradaPlaca.setText("");
                 binding.cbLavagem.setChecked(false);
                 binding.cardPreviewAvaria.setVisibility(View.GONE);
                 fotoCaminhoLocal = null;
                 viewModel.resetState();
+
+                if (!placaRegistrada.isEmpty()) {
+                    exibirDialogoTicketDigital(placaRegistrada, ts);
+                }
             } else if (state.isError()) {
                 showSnackbar(state.getMessage());
                 viewModel.resetState();
@@ -94,6 +101,40 @@ public class EntradaFragment extends Fragment {
         });
 
         return binding.getRoot();
+    }
+
+    private void exibirDialogoTicketDigital(String placa, long entradaTimestamp) {
+        try {
+            String ip = LicencaHelper.getServerIp(requireContext());
+            String urlStr;
+            if (ip.contains("://")) {
+                urlStr = ip + "/pagar?placa=" + placa + "&entrada=" + entradaTimestamp;
+            } else if (ip.contains(".") && !ip.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
+                urlStr = "https://" + ip + "/pagar?placa=" + placa + "&entrada=" + entradaTimestamp;
+            } else {
+                urlStr = "http://" + ip + ":8080/pagar?placa=" + placa + "&entrada=" + entradaTimestamp;
+            }
+
+            android.graphics.Bitmap qrBitmap = PixQrCode.gerarQrCode(urlStr, 512);
+
+            android.widget.ImageView iv = new android.widget.ImageView(requireContext());
+            iv.setImageBitmap(qrBitmap);
+            iv.setPadding(32, 32, 32, 32);
+            iv.setLayoutParams(new android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT));
+            iv.setAdjustViewBounds(true);
+            iv.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+
+            new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+                    .setTitle("Ticket Digital — Autoatendimento")
+                    .setMessage("Peça para o cliente escanear o QR Code para acompanhar o tempo e pagar pelo celular:\n\nPlaca: " + placa)
+                    .setView(iv)
+                    .setPositiveButton("OK", null)
+                    .show();
+        } catch (Exception e) {
+            showSnackbar("Erro ao gerar QR Code: " + e.getMessage());
+        }
     }
 
     private void verificarMensalista(String placa) {

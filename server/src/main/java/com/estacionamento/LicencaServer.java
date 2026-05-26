@@ -58,6 +58,8 @@ public class LicencaServer {
             server.createContext("/api/mensalistas/delete", new MensalistaDeleteHandler());
             server.createContext("/api/mensalistas/list", new MensalistaListHandler());
             server.createContext("/api/faturamento", new FaturamentoGetHandler());
+            server.createContext("/pagar", new AutoatendimentoPagarHandler());
+            server.createContext("/api/autoatendimento/status", new AutoatendimentoStatusHandler());
 
             server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool()); // Execução multi-thread assíncrona
             server.start();
@@ -539,6 +541,14 @@ public class LicencaServer {
                 // Se passou mais de 6 segundos, simular status pago (PAID) para demonstração automática
                 if (System.currentTimeMillis() - criadoEm > 6000) {
                     status = "APROVADO";
+                    try {
+                        EstacionamentoRepository.AutoatendimentoInfo info = repository.obterAutoatendimentoPorTxid(txid);
+                        if (info != null && "PENDENTE".equals(info.getStatus())) {
+                            repository.atualizarStatusAutoatendimentoPorTxid(txid, "PAGO");
+                            auditLogs.add(String.format("[%s] [PAGAMENTO] Autoatendimento PAGO via Pix placa %s: R$ %.2f",
+                                    new SimpleDateFormat("dd/MM HH:mm:ss").format(new Date()), info.getPlaca(), info.getValorPago()));
+                        }
+                    } catch (Exception ignored) {}
                 }
             }
 
@@ -2165,5 +2175,490 @@ public class LicencaServer {
         sb.append("</body>\n");
         sb.append("</html>\n");
         return sb.toString();
+    }
+
+    // --- ENDPOINTS DE AUTOATENDIMENTO B2C ---
+
+    private static class AutoatendimentoPagarHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "*");
+            exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+
+            if (!exchange.getRequestMethod().equalsIgnoreCase("GET")) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            String html = obterHtmlPagar();
+            byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+
+        private String obterHtmlPagar() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("<!DOCTYPE html>\n");
+            sb.append("<html lang=\"pt-BR\">\n");
+            sb.append("<head>\n");
+            sb.append("    <meta charset=\"UTF-8\">\n");
+            sb.append("    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
+            sb.append("    <title>Autoatendimento — Park '31</title>\n");
+            sb.append("    <link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css\">\n");
+            sb.append("    <style>\n");
+            sb.append("        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');\n");
+            sb.append("        * {\n");
+            sb.append("            box-sizing: border-box;\n");
+            sb.append("            margin: 0;\n");
+            sb.append("            padding: 0;\n");
+            sb.append("        }\n");
+            sb.append("        body {\n");
+            sb.append("            font-family: 'Inter', sans-serif;\n");
+            sb.append("            background-color: #0F172A;\n");
+            sb.append("            color: #F8FAFC;\n");
+            sb.append("            display: flex;\n");
+            sb.append("            justify-content: center;\n");
+            sb.append("            align-items: center;\n");
+            sb.append("            min-height: 100vh;\n");
+            sb.append("            padding: 20px;\n");
+            sb.append("            transition: background-color 0.5s ease;\n");
+            sb.append("        }\n");
+            sb.append("        .container {\n");
+            sb.append("            background-color: #1E293B;\n");
+            sb.append("            width: 100%;\n");
+            sb.append("            max-width: 440px;\n");
+            sb.append("            border-radius: 24px;\n");
+            sb.append("            padding: 30px;\n");
+            sb.append("            border: 1px solid #334155;\n");
+            sb.append("            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);\n");
+            sb.append("            text-align: center;\n");
+            sb.append("            position: relative;\n");
+            sb.append("            overflow: hidden;\n");
+            sb.append("        }\n");
+            sb.append("        .header {\n");
+            sb.append("            margin-bottom: 24px;\n");
+            sb.append("        }\n");
+            sb.append("        .logo {\n");
+            sb.append("            font-weight: 800;\n");
+            sb.append("            font-size: 24px;\n");
+            sb.append("            color: #38BDF8;\n");
+            sb.append("            letter-spacing: -1px;\n");
+            sb.append("            margin-bottom: 6px;\n");
+            sb.append("        }\n");
+            sb.append("        .logo span {\n");
+            sb.append("            color: #818CF8;\n");
+            sb.append("        }\n");
+            sb.append("        .subtitle {\n");
+            sb.append("            color: #94A3B8;\n");
+            sb.append("            font-size: 14px;\n");
+            sb.append("        }\n");
+            sb.append("        .plate-box {\n");
+            sb.append("            background: #FFFFFF;\n");
+            sb.append("            border: 4px solid #475569;\n");
+            sb.append("            border-radius: 12px;\n");
+            sb.append("            padding: 12px;\n");
+            sb.append("            display: inline-flex;\n");
+            sb.append("            flex-direction: column;\n");
+            sb.append("            align-items: center;\n");
+            sb.append("            justify-content: center;\n");
+            sb.append("            width: 100%;\n");
+            sb.append("            max-width: 260px;\n");
+            sb.append("            margin: 16px auto;\n");
+            sb.append("            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);\n");
+            sb.append("        }\n");
+            sb.append("        .plate-header {\n");
+            sb.append("            background: #1E40AF;\n");
+            sb.append("            color: #FFFFFF;\n");
+            sb.append("            font-size: 10px;\n");
+            sb.append("            font-weight: 800;\n");
+            sb.append("            letter-spacing: 2px;\n");
+            sb.append("            width: 100%;\n");
+            sb.append("            text-align: center;\n");
+            sb.append("            padding: 2px 0;\n");
+            sb.append("            border-radius: 4px;\n");
+            sb.append("            margin-bottom: 6px;\n");
+            sb.append("        }\n");
+            sb.append("        .plate-text {\n");
+            sb.append("            color: #0F172A;\n");
+            sb.append("            font-size: 32px;\n");
+            sb.append("            font-weight: 800;\n");
+            sb.append("            letter-spacing: 4px;\n");
+            sb.append("        }\n");
+            sb.append("        .details-box {\n");
+            sb.append("            background-color: #0F172A;\n");
+            sb.append("            border-radius: 16px;\n");
+            sb.append("            padding: 16px;\n");
+            sb.append("            margin-bottom: 24px;\n");
+            sb.append("            border: 1px solid #334155;\n");
+            sb.append("            text-align: left;\n");
+            sb.append("        }\n");
+            sb.append("        .detail-row {\n");
+            sb.append("            display: flex;\n");
+            sb.append("            justify-content: space-between;\n");
+            sb.append("            margin-bottom: 12px;\n");
+            sb.append("            font-size: 14px;\n");
+            sb.append("        }\n");
+            sb.append("        .detail-row:last-child {\n");
+            sb.append("            margin-bottom: 0;\n");
+            sb.append("            padding-top: 12px;\n");
+            sb.append("            border-top: 1px dashed #334155;\n");
+            sb.append("        }\n");
+            sb.append("        .detail-label {\n");
+            sb.append("            color: #94A3B8;\n");
+            sb.append("        }\n");
+            sb.append("        .detail-value {\n");
+            sb.append("            color: #F8FAFC;\n");
+            sb.append("            font-weight: 600;\n");
+            sb.append("        }\n");
+            sb.append("        .total-value {\n");
+            sb.append("            color: #F59E0B;\n");
+            sb.append("            font-size: 20px;\n");
+            sb.append("            font-weight: 800;\n");
+            sb.append("        }\n");
+            sb.append("        .btn {\n");
+            sb.append("            background-color: #38BDF8;\n");
+            sb.append("            color: #0F172A;\n");
+            sb.append("            font-weight: 700;\n");
+            sb.append("            font-size: 16px;\n");
+            sb.append("            padding: 16px;\n");
+            sb.append("            width: 100%;\n");
+            sb.append("            border: none;\n");
+            sb.append("            border-radius: 14px;\n");
+            sb.append("            cursor: pointer;\n");
+            sb.append("            transition: all 0.2s ease;\n");
+            sb.append("            box-shadow: 0 4px 14px 0 rgba(56, 189, 248, 0.4);\n");
+            sb.append("            display: flex;\n");
+            sb.append("            justify-content: center;\n");
+            sb.append("            align-items: center;\n");
+            sb.append("            gap: 10px;\n");
+            sb.append("        }\n");
+            sb.append("        .btn:hover {\n");
+            sb.append("            transform: translateY(-2px);\n");
+            sb.append("            box-shadow: 0 6px 20px 0 rgba(56, 189, 248, 0.6);\n");
+            sb.append("            background-color: #7DD3FC;\n");
+            sb.append("        }\n");
+            sb.append("        .qr-section {\n");
+            sb.append("            display: none;\n");
+            sb.append("            margin-top: 24px;\n");
+            sb.append("            padding-top: 24px;\n");
+            sb.append("            border-top: 1px solid #334155;\n");
+            sb.append("            animation: fadeIn 0.4s ease forwards;\n");
+            sb.append("        }\n");
+            sb.append("        .qr-code-container {\n");
+            sb.append("            width: 200px;\n");
+            sb.append("            height: 200px;\n");
+            sb.append("            border-radius: 12px;\n");
+            sb.append("            padding: 10px;\n");
+            sb.append("            background: white;\n");
+            sb.append("            margin: 16px auto;\n");
+            sb.append("            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);\n");
+            sb.append("        }\n");
+            sb.append("        .pix-copia-cola {\n");
+            sb.append("            background-color: #0F172A;\n");
+            sb.append("            border: 1px solid #334155;\n");
+            sb.append("            border-radius: 10px;\n");
+            sb.append("            padding: 12px;\n");
+            sb.append("            font-size: 12px;\n");
+            sb.append("            width: 100%;\n");
+            sb.append("            text-overflow: ellipsis;\n");
+            sb.append("            white-space: nowrap;\n");
+            sb.append("            overflow: hidden;\n");
+            sb.append("            margin-bottom: 12px;\n");
+            sb.append("            color: #94A3B8;\n");
+            sb.append("            font-family: monospace;\n");
+            sb.append("            cursor: pointer;\n");
+            sb.append("            text-align: center;\n");
+            sb.append("        }\n");
+            sb.append("        .status-badge {\n");
+            sb.append("            display: inline-flex;\n");
+            sb.append("            align-items: center;\n");
+            sb.append("            gap: 8px;\n");
+            sb.append("            padding: 8px 16px;\n");
+            sb.append("            border-radius: 20px;\n");
+            sb.append("            font-size: 13px;\n");
+            sb.append("            font-weight: 600;\n");
+            sb.append("            background-color: rgba(245, 158, 11, 0.1);\n");
+            sb.append("            color: #FBBF24;\n");
+            sb.append("            border: 1px solid rgba(245, 158, 11, 0.3);\n");
+            sb.append("        }\n");
+            sb.append("        .status-badge.pago {\n");
+            sb.append("            background-color: rgba(34, 197, 94, 0.1);\n");
+            sb.append("            color: #4ADE80;\n");
+            sb.append("            border: 1px solid rgba(34, 197, 94, 0.3);\n");
+            sb.append("        }\n");
+            sb.append("        .success-screen {\n");
+            sb.append("            display: none;\n");
+            sb.append("            text-align: center;\n");
+            sb.append("            animation: scaleIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;\n");
+            sb.append("        }\n");
+            sb.append("        .success-icon {\n");
+            sb.append("            font-size: 64px;\n");
+            sb.append("            color: #22C55E;\n");
+            sb.append("            margin-bottom: 20px;\n");
+            sb.append("            filter: drop-shadow(0 0 15px rgba(34, 197, 94, 0.4));\n");
+            sb.append("        }\n");
+            sb.append("        @keyframes fadeIn {\n");
+            sb.append("            from { opacity: 0; transform: translateY(10px); }\n");
+            sb.append("            to { opacity: 1; transform: translateY(0); }\n");
+            sb.append("        }\n");
+            sb.append("        @keyframes scaleIn {\n");
+            sb.append("            from { opacity: 0; transform: scale(0.9); }\n");
+            sb.append("            to { opacity: 1; transform: scale(1); }\n");
+            sb.append("        }\n");
+            sb.append("    </style>\n");
+            sb.append("</head>\n");
+            sb.append("<body>\n");
+            sb.append("    <div class=\"container\" id=\"main-container\">\n");
+            sb.append("        <div id=\"payment-screen\">\n");
+            sb.append("            <div class=\"header\">\n");
+            sb.append("                <div class=\"logo\">Park <span>'31</span></div>\n");
+            sb.append("                <div class=\"subtitle\">Autoatendimento B2C — Ticket Digital</div>\n");
+            sb.append("            </div>\n");
+            sb.append("            <div class=\"plate-box\">\n");
+            sb.append("                <div class=\"plate-header\">MERCOSUL</div>\n");
+            sb.append("                <div class=\"plate-text\" id=\"lbl-placa\">---</div>\n");
+            sb.append("            </div>\n");
+            sb.append("            <div class=\"details-box\">\n");
+            sb.append("                <div class=\"detail-row\">\n");
+            sb.append("                    <span class=\"detail-label\">Entrada</span>\n");
+            sb.append("                    <span class=\"detail-value\" id=\"lbl-entrada\">--:--:--</span>\n");
+            sb.append("                </div>\n");
+            sb.append("                <div class=\"detail-row\">\n");
+            sb.append("                    <span class=\"detail-label\">Tempo Decorrido</span>\n");
+            sb.append("                    <span class=\"detail-value\" id=\"lbl-tempo\">-- min</span>\n");
+            sb.append("                </div>\n");
+            sb.append("                <div class=\"detail-row\">\n");
+            sb.append("                    <span class=\"detail-label\">Valor por Hora</span>\n");
+            sb.append("                    <span class=\"detail-value\" id=\"lbl-tarifa-hora\">R$ --</span>\n");
+            sb.append("                </div>\n");
+            sb.append("                <div class=\"detail-row\">\n");
+            sb.append("                    <span class=\"detail-label\">Total Acumulado</span>\n");
+            sb.append("                    <span class=\"total-value\" id=\"lbl-total\">R$ --</span>\n");
+            sb.append("                </div>\n");
+            sb.append("            </div>\n");
+            sb.append("            <button class=\"btn\" id=\"btn-gerar-pix\" onclick=\"gerarCobrancaPix()\">\n");
+            sb.append("                <i class=\"fa-brands fa-pix\"></i> Pagar com Pix\n");
+            sb.append("            </button>\n");
+            sb.append("            <div class=\"qr-section\" id=\"qr-section\">\n");
+            sb.append("                <div class=\"status-badge\" id=\"status-badge\">\n");
+            sb.append("                    <i class=\"fa-solid fa-spinner fa-spin\"></i> Aguardando Pagamento...\n");
+            sb.append("                </div>\n");
+            sb.append("                <div class=\"qr-code-container\">\n");
+            sb.append("                    <img id=\"img-qrcode\" src=\"\" alt=\"QR Code Pix\" style=\"width: 100%; height: 100%;\">\n");
+            sb.append("                </div>\n");
+            sb.append("                <div class=\"pix-copia-cola\" id=\"pix-raw\" onclick=\"copiarPix()\">\n");
+            sb.append("                    Clique aqui para copiar chave Pix Copia e Cola\n");
+            sb.append("                </div>\n");
+            sb.append("                <div style=\"font-size: 11px; color: #64748B;\">\n");
+            sb.append("                    O sandbox aprovará automaticamente em 6 segundos após a geração.\n");
+            sb.append("                </div>\n");
+            sb.append("            </div>\n");
+            sb.append("        </div>\n");
+            sb.append("        <div class=\"success-screen\" id=\"success-screen\">\n");
+            sb.append("            <i class=\"fa-solid fa-circle-check success-icon\"></i>\n");
+            sb.append("            <h2 style=\"font-size: 24px; font-weight: 800; color: #4ADE80; margin-bottom: 12px;\">PAGAMENTO APROVADO!</h2>\n");
+            sb.append("            <p style=\"color: #94A3B8; font-size: 15px; margin-bottom: 24px; line-height: 1.5;\">\n");
+            sb.append("                Obrigado! A saída do veículo <strong style=\"color: #F8FAFC;\" id=\"success-placa\">---</strong> foi liberada no sistema. Você pode se dirigir à cancela de saída imediatamente.\n");
+            sb.append("            </p>\n");
+            sb.append("            <div class=\"status-badge pago\">\n");
+            sb.append("                <i class=\"fa-solid fa-lock-open\"></i> Saída Liberada\n");
+            sb.append("            </div>\n");
+            sb.append("        </div>\n");
+            sb.append("    </div>\n");
+            sb.append("    <script>\n");
+            sb.append("        const params = new URLSearchParams(window.location.search);\n");
+            sb.append("        const placa = params.get('placa') ? params.get('placa').toUpperCase() : '';\n");
+            sb.append("        const entrada = parseInt(params.get('entrada') || Date.now());\n");
+            sb.append("        document.getElementById('lbl-placa').innerText = placa || 'PLACA-BR';\n");
+            sb.append("        document.getElementById('lbl-entrada').innerText = new Date(entrada).toLocaleString('pt-BR');\n");
+            sb.append("        let valorCalculado = 0;\n");
+            sb.append("        let pollingInterval = null;\n");
+            sb.append("        async function atualizarTempoEValor() {\n");
+            sb.append("            const agora = Date.now();\n");
+            sb.append("            const elapsed = agora - entrada;\n");
+            sb.append("            const minutos = Math.max(1, Math.floor(elapsed / 60000));\n");
+            sb.append("            const horas = Math.ceil(minutos / 60);\n");
+            sb.append("            let tarifaHora = 5.0;\n");
+            sb.append("            try {\n");
+            sb.append("                const tRes = await fetch('/api/faturamento');\n");
+            sb.append("                const tData = await tRes.json();\n");
+            sb.append("                // O faturamento ou config pode conter a tarifa ativa\n");
+            sb.append("            } catch(e) {}\n");
+            sb.append("            valorCalculado = horas * tarifaHora;\n");
+            sb.append("            document.getElementById('lbl-tempo').innerText = `${minutos} min (${horas}h)`;\n");
+            sb.append("            document.getElementById('lbl-tarifa-hora').innerText = `R$ ${tarifaHora.toFixed(2)}`;\n");
+            sb.append("            document.getElementById('lbl-total').innerText = `R$ ${valorCalculado.toFixed(2)}`;\n");
+            sb.append("        }\n");
+            sb.append("        atualizarTempoEValor();\n");
+            sb.append("        setInterval(atualizarTempoEValor, 10000);\n");
+            sb.append("        async function gerarCobrancaPix() {\n");
+            sb.append("            const btn = document.getElementById('btn-gerar-pix');\n");
+            sb.append("            btn.disabled = true;\n");
+            sb.append("            btn.innerHTML = '<i class=\"fa-solid fa-circle-notch fa-spin\"></i> Gerando...';\n");
+            sb.append("            try {\n");
+            sb.append("                const res = await fetch('/api/pix/create', {\n");
+            sb.append("                    method: 'POST',\n");
+            sb.append("                    headers: { 'Content-Type': 'application/json' },\n");
+            sb.append("                    body: JSON.stringify({ placa: placa, valor: valorCalculado })\n");
+            sb.append("                });\n");
+            sb.append("                const data = await res.json();\n");
+            sb.append("                if (data.success) {\n");
+            sb.append("                    const payload = data.payload;\n");
+            sb.append("                    const txid = data.txid;\n");
+            sb.append("                    await fetch('/api/autoatendimento/status', {\n");
+            sb.append("                        method: 'POST',\n");
+            sb.append("                        headers: { 'Content-Type': 'application/json' },\n");
+            sb.append("                        body: JSON.stringify({\n");
+            sb.append("                            acao: 'REGISTRAR',\n");
+            sb.append("                            placa: placa,\n");
+            sb.append("                            entrada: entrada,\n");
+            sb.append("                            valor: valorCalculado,\n");
+            sb.append("                            txid: txid\n");
+            sb.append("                        })\n");
+            sb.append("                    });\n");
+            sb.append("                    document.getElementById('img-qrcode').src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(payload)}`;\n");
+            sb.append("                    document.getElementById('pix-raw').setAttribute('data-payload', payload);\n");
+            sb.append("                    document.getElementById('qr-section').style.display = 'block';\n");
+            sb.append("                    btn.style.display = 'none';\n");
+            sb.append("                    iniciarPollingStatus(txid);\n");
+            sb.append("                } else {\n");
+            sb.append("                    alert('Erro ao gerar cobrança. Tente novamente.');\n");
+            sb.append("                    btn.disabled = false;\n");
+            sb.append("                    btn.innerHTML = '<i class=\"fa-brands fa-pix\"></i> Pagar com Pix';\n");
+            sb.append("                }\n");
+            sb.append("            } catch (err) {\n");
+            sb.append("                alert('Erro de conexão com o servidor de pagamento: ' + err.message);\n");
+            sb.append("                btn.disabled = false;\n");
+            sb.append("                btn.innerHTML = '<i class=\"fa-brands fa-pix\"></i> Pagar com Pix';\n");
+            sb.append("            }\n");
+            sb.append("        }\n");
+            sb.append("        function copiarPix() {\n");
+            sb.append("            const payload = document.getElementById('pix-raw').getAttribute('data-payload');\n");
+            sb.append("            navigator.clipboard.writeText(payload);\n");
+            sb.append("            const rawBox = document.getElementById('pix-raw');\n");
+            sb.append("            rawBox.innerText = 'Copiado para a área de transferência!';\n");
+            sb.append("            rawBox.style.color = '#4ADE80';\n");
+            sb.append("            setTimeout(() => {\n");
+            sb.append("                rawBox.innerText = 'Clique aqui para copiar chave Pix Copia e Cola';\n");
+            sb.append("                rawBox.style.color = '#94A3B8';\n");
+            sb.append("            }, 2500);\n");
+            sb.append("        }\n");
+            sb.append("        function iniciarPollingStatus(txid) {\n");
+            sb.append("            pollingInterval = setInterval(async () => {\n");
+            sb.append("                try {\n");
+            sb.append("                    const res = await fetch('/api/pix/status', {\n");
+            sb.append("                        method: 'POST',\n");
+            sb.append("                        headers: { 'Content-Type': 'application/json' },\n");
+            sb.append("                        body: JSON.stringify({ txid: txid })\n");
+            sb.append("                    });\n");
+            sb.append("                    const data = await res.json();\n");
+            sb.append("                    if (data.status === 'APROVADO') {\n");
+            sb.append("                        clearInterval(pollingInterval);\n");
+            sb.append("                        exibirSucesso();\n");
+            sb.append("                    }\n");
+            sb.append("                } catch (err) {\n");
+            sb.append("                    console.error('Erro de polling Pix:', err);\n");
+            sb.append("                }\n");
+            sb.append("            }, 2000);\n");
+            sb.append("        }\n");
+            sb.append("        function exibirSucesso() {\n");
+            sb.append("            document.getElementById('payment-screen').style.display = 'none';\n");
+            sb.append("            document.getElementById('success-placa').innerText = placa || 'PLACA-BR';\n");
+            sb.append("            document.getElementById('success-screen').style.display = 'block';\n");
+            sb.append("            document.body.style.backgroundColor = '#064E3B';\n");
+            sb.append("        }\n");
+            sb.append("    </script>\n");
+            sb.append("</body>\n");
+            sb.append("</html>\n");
+            return sb.toString();
+        }
+    }
+
+    private static class AutoatendimentoStatusHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "*");
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+
+            if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            if (exchange.getRequestMethod().equalsIgnoreCase("GET")) {
+                // Obter status de pagamento por placa
+                Map<String, String> params = parseQueryParams(exchange.getRequestURI().getQuery());
+                String placa = params.get("placa");
+                String responseJson = "{\"status\":\"NENHUM\"}";
+                
+                if (placa != null && !placa.isEmpty()) {
+                    try {
+                        EstacionamentoRepository.AutoatendimentoInfo info = repository.obterAutoatendimento(placa);
+                        if (info != null) {
+                            responseJson = String.format(Locale.US,
+                                "{\"status\":\"%s\",\"valor\":%.2f,\"entrada\":%d,\"saida\":%d}",
+                                info.getStatus(), info.getValorPago(), info.getHoraEntrada(), info.getHoraSaida()
+                            );
+                        }
+                    } catch (Exception ignored) {}
+                }
+                
+                byte[] bytes = responseJson.getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } else if (exchange.getRequestMethod().equalsIgnoreCase("POST")) {
+                // Registrar autoatendimento
+                Map<String, String> params = parseRequestBody(exchange.getRequestBody());
+                String acao = params.get("acao");
+                String responseJson = "{\"success\":false}";
+
+                if ("REGISTRAR".equals(acao)) {
+                    String placa = params.get("placa");
+                    String entradaStr = params.get("entrada");
+                    String valorStr = params.get("valor");
+                    String txid = params.get("txid");
+
+                    if (placa != null && entradaStr != null && valorStr != null && txid != null) {
+                        try {
+                            long entrada = Long.parseLong(entradaStr);
+                            double valor = Double.parseDouble(valorStr);
+                            repository.registrarAutoatendimento(placa, entrada, valor, "PENDENTE", txid);
+                            responseJson = "{\"success\":true}";
+                            auditLogs.add(String.format("[%s] [INFO] Cobrança autoatendimento gerada para placa %s: R$ %.2f",
+                                    new SimpleDateFormat("dd/MM HH:mm:ss").format(new Date()), placa, valor));
+                        } catch (Exception ignored) {}
+                    }
+                }
+
+                byte[] bytes = responseJson.getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } else {
+                exchange.sendResponseHeaders(405, -1);
+            }
+        }
+    }
+
+    private static Map<String, String> parseQueryParams(String query) {
+        Map<String, String> params = new HashMap<>();
+        if (query == null || query.isEmpty()) return params;
+        String[] pairs = query.split("&");
+        for (String pair : pairs) {
+            String[] kv = pair.split("=", 2);
+            try {
+                String k = URLDecoder.decode(kv[0], "UTF-8");
+                String v = kv.length > 1 ? URLDecoder.decode(kv[1], "UTF-8") : "";
+                params.put(k, v);
+            } catch (Exception ignored) {}
+        }
+        return params;
     }
 }

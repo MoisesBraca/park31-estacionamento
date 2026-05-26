@@ -40,8 +40,7 @@
                         android:id="@+id/til_placa"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:hint="Placa do Veículo"
-                        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                        app:hintEnabled="false"
                         android:layout_toStartOf="@id/btn_scan"
                         android:layout_marginEnd="8dp">
 
@@ -49,11 +48,17 @@
                             android:id="@+id/et_entrada_placa"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
+                            android:background="@drawable/bg_plate"
+                            android:textColor="#0E1726"
                             android:inputType="textCapCharacters"
-                            android:textSize="20sp"
+                            android:textSize="24sp"
                             android:fontFamily="sans-serif-black"
-                            android:gravity="center" />
+                            android:gravity="center"
+                            android:hint="PLACA-BR"
+                            android:textColorHint="#94A3B8"
+                            android:padding="12dp" />
                     </com.google.android.material.textfield.TextInputLayout>
+
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btn_scan"
