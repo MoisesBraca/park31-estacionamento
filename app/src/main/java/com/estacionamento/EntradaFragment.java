@@ -126,11 +126,23 @@ public class EntradaFragment extends Fragment {
                 "com.estacionamento.fileprovider",
                 imageFile
             );
+
+            // Grant write and read permissions explicitly to the Camera packages to avoid Permission Denial crash
+            android.content.Intent intent = new android.content.Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
+            java.util.List<android.content.pm.ResolveInfo> resInfoList = requireContext().getPackageManager()
+                .queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
+            for (android.content.pm.ResolveInfo resolveInfo : resInfoList) {
+                String packageName = resolveInfo.activityInfo.packageName;
+                requireContext().grantUriPermission(packageName, fotoUri, 
+                    android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION | android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            }
+
             takePictureLauncher.launch(fotoUri);
         } catch (Exception e) {
             showSnackbar("Erro ao abrir a câmera: " + e.getMessage());
         }
     }
+
 
     private void atualizarTextosLavagem() {
         binding.rbDucha.setText("Ducha (R$ " + String.format("%.2f", PrecosServicos.getPrecoDucha()) + ")");
