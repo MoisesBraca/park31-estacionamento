@@ -30,6 +30,15 @@ public class EntradaFragment extends Fragment {
             }
         });
 
+    private final androidx.activity.result.ActivityResultLauncher<String> requestPermissionLauncher =
+        registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.RequestPermission(), isGranted -> {
+            if (isGranted) {
+                tirarFotoAvaria();
+            } else {
+                showSnackbar("Permissão de câmera necessária para tirar fotos de vistoria!");
+            }
+        });
+
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         binding = FragmentEntradaBinding.inflate(inflater, container, false);
@@ -59,7 +68,14 @@ public class EntradaFragment extends Fragment {
         binding.btnScan.setOnClickListener(v -> 
             Navigation.findNavController(v).navigate(R.id.nav_ocr));
 
-        binding.btnFotoAvaria.setOnClickListener(v -> tirarFotoAvaria());
+        binding.btnFotoAvaria.setOnClickListener(v -> {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(requireContext(), android.Manifest.permission.CAMERA)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                tirarFotoAvaria();
+            } else {
+                requestPermissionLauncher.launch(android.Manifest.permission.CAMERA);
+            }
+        });
 
         binding.btnEntradaRegistrar.setOnClickListener(v -> registrarEntrada());
 
