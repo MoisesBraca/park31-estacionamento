@@ -17,6 +17,10 @@ public class PixQrCode {
 
     public static Bitmap gerarQrCode(String pixKey, double valor, int size) throws WriterException {
         String payload = gerarPayload(pixKey, valor);
+        return gerarQrCode(payload, size);
+    }
+
+    public static Bitmap gerarQrCode(String payload, int size) throws WriterException {
         BitMatrix matrix = new MultiFormatWriter().encode(payload, BarcodeFormat.QR_CODE, size, size);
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565);
         for (int x = 0; x < size; x++) {

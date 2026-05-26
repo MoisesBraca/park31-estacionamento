@@ -33,6 +33,8 @@ public class SaidaFragment extends Fragment {
     private Veiculo veiculoAtual;
     private double tarifaAtual;
     private final SimpleDateFormat dateFormat = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault());
+    private final android.os.Handler pollingHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable pollingRunnable;
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
@@ -60,14 +62,68 @@ public class SaidaFragment extends Fragment {
                 if (veiculo.isTemLavagem()) {
                     tempoTexto += " + Lavagem (" + veiculo.getTipoLavagem() + ")";
                 }
-
                 binding.rowTempo.tvValue.setText(tempoTexto);
-                binding.rowValor.tvValue.setText("R$ " + String.format("%.2f", tarifaAtual));
-                binding.etSaidaValor.setText(String.format("%.2f", tarifaAtual));
-                binding.cardSaidaDetalhes.setVisibility(View.VISIBLE);
+
+                String avariaPath = veiculo.getFotoAvariaPath();
+                if (avariaPath != null && !avariaPath.isEmpty()) {
+                    binding.cardSaidaAvaria.setVisibility(View.VISIBLE);
+                    binding.ivSaidaAvaria.setImageURI(android.net.Uri.fromFile(new java.io.File(avariaPath)));
+                } else {
+                    binding.cardSaidaAvaria.setVisibility(View.GONE);
+                }
+
+                // Check monthly subscriber status asynchronously
+                new Thread(() -> {
+                    try {
+                        EstacionamentoRepository repo = EstacionamentoRepository.getInstance(requireActivity().getApplication());
+                        Mensalista m = repo.obterMensalistaSync(veiculo.getPlaca());
+                        if (getActivity() != null) {
+                            getActivity().runOnUiThread(() -> {
+                                if (binding == null) return;
+                                boolean isMensalistaAtivo = false;
+                                if (m != null) {
+                                    long hoje = System.currentTimeMillis();
+                                    if ("ATIVO".equalsIgnoreCase(m.getStatus()) && m.getVencimento() >= hoje) {
+                                        isMensalistaAtivo = true;
+                                    }
+                                }
+
+                                if (isMensalistaAtivo) {
+                                    tarifaAtual = veiculo.getValorLavagem(); // zero the parking fee
+                                    binding.tvMensalistaSaidaBadge.setVisibility(View.VISIBLE);
+                                    binding.tvMensalistaSaidaBadge.setText("MENSALISTA ATIVO: " + m.getNomeCliente().toUpperCase() + " (SAÍDA TARIFA ZERADA)");
+                                    binding.tvMensalistaSaidaBadge.setBackgroundColor(androidx.core.content.ContextCompat.getColor(requireContext(), android.R.color.holo_green_dark));
+                                    
+                                    binding.rowValor.tvValue.setText("R$ " + String.format("%.2f", tarifaAtual) + " (MENSALISTA)");
+                                    binding.rowValor.tvValue.setTextColor(androidx.core.content.ContextCompat.getColor(requireContext(), android.R.color.holo_green_dark));
+                                    binding.etSaidaValor.setText(String.format("%.2f", tarifaAtual));
+                                    
+                                    if (tarifaAtual == 0) {
+                                        binding.rgPagamento.setVisibility(View.GONE);
+                                        binding.etSaidaValor.setEnabled(false);
+                                    } else {
+                                        binding.rgPagamento.setVisibility(View.VISIBLE);
+                                        binding.etSaidaValor.setEnabled(true);
+                                    }
+                                } else {
+                                    binding.tvMensalistaSaidaBadge.setVisibility(View.GONE);
+                                    binding.rgPagamento.setVisibility(View.VISIBLE);
+                                    binding.etSaidaValor.setEnabled(true);
+                                    
+                                    binding.rowValor.tvValue.setText("R$ " + String.format("%.2f", tarifaAtual));
+                                    binding.rowValor.tvValue.setTextColor(getResources().getColor(R.color.danger));
+                                    binding.etSaidaValor.setText(String.format("%.2f", tarifaAtual));
+                                }
+                                binding.cardSaidaDetalhes.setVisibility(View.VISIBLE);
+                            });
+                        }
+                    } catch (Exception ignored) {}
+                }).start();
+
             } else if (state.isError()) {
                 mostrarMensagem("Erro", state.getMessage());
                 binding.cardSaidaDetalhes.setVisibility(View.GONE);
+                binding.cardSaidaAvaria.setVisibility(View.GONE);
                 veiculoAtual = null;
             }
         });
@@ -96,6 +152,7 @@ public class SaidaFragment extends Fragment {
                 // FIX: Clear UI after success
                 binding.etSaidaPlaca.setText("");
                 binding.cardSaidaDetalhes.setVisibility(View.GONE);
+                binding.cardSaidaAvaria.setVisibility(View.GONE);
                 veiculoAtual = null;
                 tarifaAtual = 0;
                 viewModel.resetSaida();
@@ -142,6 +199,18 @@ public class SaidaFragment extends Fragment {
     private void confirmarSaida() {
         if (veiculoAtual == null) return;
 
+        if (binding.tvMensalistaSaidaBadge.getVisibility() == View.VISIBLE) {
+            double valorPago = 0.0;
+            String valorStr = binding.etSaidaValor.getText().toString().trim().replace(",", ".");
+            if (!valorStr.isEmpty()) {
+                try {
+                    valorPago = Double.parseDouble(valorStr);
+                } catch (Exception ignored) {}
+            }
+            processarSaidaFinal(valorPago, "CORTESIA MENSALISTA");
+            return;
+        }
+
         String valorStr = binding.etSaidaValor.getText().toString().trim().replace(",", ".");
         if (valorStr.isEmpty()) {
             mostrarMensagem("Aviso", "Informe o valor recebido");
@@ -166,7 +235,7 @@ public class SaidaFragment extends Fragment {
         String formaPagamento = rb != null ? rb.getText().toString() : "Dinheiro";
 
         if (formaPagamento.contains("Pix")) {
-            mostrarQrCodePix(valorPago, formaPagamento);
+            requisitarPixDinamico(valorPago, veiculoAtual.getPlaca(), formaPagamento);
         } else if (formaPagamento.contains("NFC")) {
             mostrarSimulacaoNFC(valorPago, formaPagamento);
         } else {
@@ -174,10 +243,74 @@ public class SaidaFragment extends Fragment {
         }
     }
 
-    private void mostrarQrCodePix(double valor, String forma) {
+    private void requisitarPixDinamico(double valor, String placa, String forma) {
+        final com.google.android.material.dialog.MaterialAlertDialogBuilder loadingDialogBuilder = 
+            new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+                .setTitle("PIX Dinâmico")
+                .setMessage("Gerando cobrança na API central...")
+                .setCancelable(false);
+        final androidx.appcompat.app.AlertDialog loadingDialog = loadingDialogBuilder.show();
+
+        new Thread(() -> {
+            try {
+                String ip = LicencaHelper.getServerIp(requireContext());
+                String urlStr;
+                if (ip.contains("://")) {
+                    urlStr = ip + "/api/pix/create";
+                } else if (ip.contains(".") && !ip.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
+                    urlStr = "https://" + ip + "/api/pix/create";
+                } else {
+                    urlStr = "http://" + ip + ":8080/api/pix/create";
+                }
+                java.net.URL url = new java.net.URL(urlStr);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(4000);
+                conn.setReadTimeout(4000);
+
+                String json = "{\"placa\":\"" + placa + "\",\"valor\":\"" + valor + "\"}";
+                try (java.io.OutputStream os = conn.getOutputStream()) {
+                    byte[] input = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    os.write(input, 0, input.length);
+                }
+
+                int code = conn.getResponseCode();
+                if (code == 200) {
+                    java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        sb.append(line);
+                    }
+                    org.json.JSONObject resp = new org.json.JSONObject(sb.toString());
+                    String txid = resp.getString("txid");
+                    String payload = resp.getString("payload");
+
+                    requireActivity().runOnUiThread(() -> {
+                        loadingDialog.dismiss();
+                        exibirDialogoPixDinamico(txid, payload, valor, forma);
+                    });
+                } else {
+                    requireActivity().runOnUiThread(() -> {
+                        loadingDialog.dismiss();
+                        mostrarMensagem("Erro", "Erro HTTP ao criar Pix: " + code);
+                    });
+                }
+                conn.disconnect();
+            } catch (Exception e) {
+                requireActivity().runOnUiThread(() -> {
+                    loadingDialog.dismiss();
+                    mostrarMensagem("Erro de Conexão", "Não foi possível conectar ao servidor central: " + e.getMessage());
+                });
+            }
+        }).start();
+    }
+
+    private void exibirDialogoPixDinamico(String txid, String payload, double valor, String forma) {
         try {
-            String pixKey = Preferences.getPixKey();
-            Bitmap qrBitmap = PixQrCode.gerarQrCode(pixKey, valor, 512);
+            android.graphics.Bitmap qrBitmap = PixQrCode.gerarQrCode(payload, 512);
 
             ImageView iv = new ImageView(requireContext());
             iv.setImageBitmap(qrBitmap);
@@ -188,15 +321,94 @@ public class SaidaFragment extends Fragment {
             iv.setAdjustViewBounds(true);
             iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
 
-            new MaterialAlertDialogBuilder(requireContext())
-                    .setTitle("PIX — QR Code")
-                    .setMessage("Valor: R$ " + String.format("%.2f", tarifaAtual))
+            final MaterialAlertDialogBuilder dialogBuilder = new MaterialAlertDialogBuilder(requireContext())
+                    .setTitle("PIX Dinâmico — Central de Vendas")
+                    .setMessage("Valor: R$ " + String.format(Locale.US, "%.2f", tarifaAtual) + "\n\nStatus: Aguardando pagamento na API...")
                     .setView(iv)
-                    .setNegativeButton("Cancelar", null)
-                    .setPositiveButton("Pagamento Conf.", (d, w) -> processarSaidaFinal(valor, forma))
-                    .show();
+                    .setNegativeButton("Cancelar", (dialog, which) -> {
+                        pararPollingPix();
+                    });
+            
+            final androidx.appcompat.app.AlertDialog pixDialog = dialogBuilder.show();
+
+            iniciarPollingPix(txid, valor, forma, pixDialog);
         } catch (Exception e) {
-            mostrarMensagem("Erro", "Erro ao gerar QR Code");
+            mostrarMensagem("Erro", "Erro ao gerar QR Code: " + e.getMessage());
+        }
+    }
+
+    private void iniciarPollingPix(String txid, double valor, String forma, androidx.appcompat.app.AlertDialog dialog) {
+        pollingRunnable = new Runnable() {
+            @Override
+            public void run() {
+                new Thread(() -> {
+                    try {
+                        String ip = LicencaHelper.getServerIp(requireContext());
+                        String urlStr;
+                        if (ip.contains("://")) {
+                            urlStr = ip + "/api/pix/status";
+                        } else if (ip.contains(".") && !ip.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
+                            urlStr = "https://" + ip + "/api/pix/status";
+                        } else {
+                            urlStr = "http://" + ip + ":8080/api/pix/status";
+                        }
+                        java.net.URL url = new java.net.URL(urlStr);
+                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                        conn.setRequestMethod("POST");
+                        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                        conn.setDoOutput(true);
+                        conn.setConnectTimeout(2000);
+                        conn.setReadTimeout(2000);
+
+                        String json = "{\"txid\":\"" + txid + "\"}";
+                        try (java.io.OutputStream os = conn.getOutputStream()) {
+                            byte[] input = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                            os.write(input, 0, input.length);
+                        }
+
+                        int code = conn.getResponseCode();
+                        if (code == 200) {
+                            java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+                            StringBuilder sb = new StringBuilder();
+                            String line;
+                            while ((line = br.readLine()) != null) {
+                                sb.append(line);
+                            }
+                            org.json.JSONObject resp = new org.json.JSONObject(sb.toString());
+                            String status = resp.getString("status");
+
+                            if ("APROVADO".equals(status)) {
+                                requireActivity().runOnUiThread(() -> {
+                                    dialog.dismiss();
+                                    pararPollingPix();
+                                    processarSaidaFinal(valor, forma);
+                                });
+                            } else {
+                                requireActivity().runOnUiThread(() -> {
+                                    pollingHandler.postDelayed(pollingRunnable, 2000);
+                                });
+                            }
+                        } else {
+                            requireActivity().runOnUiThread(() -> {
+                                pollingHandler.postDelayed(pollingRunnable, 3000);
+                            });
+                        }
+                        conn.disconnect();
+                    } catch (Exception e) {
+                        requireActivity().runOnUiThread(() -> {
+                            pollingHandler.postDelayed(pollingRunnable, 4000);
+                        });
+                    }
+                }).start();
+            }
+        };
+        pollingHandler.post(pollingRunnable);
+    }
+
+    private void pararPollingPix() {
+        if (pollingRunnable != null) {
+            pollingHandler.removeCallbacks(pollingRunnable);
+            pollingRunnable = null;
         }
     }
 
@@ -274,6 +486,7 @@ public class SaidaFragment extends Fragment {
     @Override
     public void onDestroyView() {
         super.onDestroyView();
+        pararPollingPix();
         binding = null;
     }
 }

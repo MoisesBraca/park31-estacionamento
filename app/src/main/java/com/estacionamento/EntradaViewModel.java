@@ -24,9 +24,9 @@ public class EntradaViewModel extends AndroidViewModel {
         return entradaState;
     }
 
-    public void registrarEntrada(String placa, boolean temLavagem, String tipoLavagem, double valorLavagem) {
+    public void registrarEntrada(String placa, boolean temLavagem, String tipoLavagem, double valorLavagem, String fotoAvariaPath) {
         entradaState.setValue(UiState.loading());
-        repository.registrarEntrada(placa.toUpperCase().trim(), temLavagem, tipoLavagem, valorLavagem,
+        repository.registrarEntrada(placa.toUpperCase().trim(), temLavagem, tipoLavagem, valorLavagem, fotoAvariaPath,
             new EstacionamentoRepository.OnEntradaListener() {
                 @Override
                 public void onSuccess() {

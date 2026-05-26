@@ -69,6 +69,32 @@
                         app:cornerRadius="12dp" />
                 </RelativeLayout>
 
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/card_mensalista_badge"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:visibility="gone"
+                    app:cardCornerRadius="8dp"
+                    app:strokeWidth="1dp"
+                    app:cardElevation="2dp">
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:padding="12dp"
+                        android:gravity="center_vertical">
+                        <TextView
+                            android:id="@+id/tv_mensalista_badge_texto"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="MENSALISTA"
+                            android:textSize="15sp"
+                            android:fontFamily="sans-serif-black"
+                            android:gravity="center" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -99,6 +125,45 @@
                         <RadioButton android:id="@+id/rb_simples" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Simples" />
                         <RadioButton android:id="@+id/rb_completa" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Completa" />
                     </RadioGroup>
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Vistoria de Avarias (Foto)"
+                    android:layout_marginTop="16dp"
+                    android:layout_marginBottom="8dp"
+                    android:fontFamily="sans-serif-medium" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="8dp">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_foto_avaria"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Tirar Foto"
+                        app:icon="@android:drawable/ic_menu_camera"
+                        app:cornerRadius="8dp"
+                        android:layout_marginEnd="16dp" />
+
+                    <com.google.android.material.card.MaterialCardView
+                        android:id="@+id/card_preview_avaria"
+                        android:layout_width="64dp"
+                        android:layout_height="64dp"
+                        app:cardCornerRadius="8dp"
+                        android:visibility="gone">
+                        <ImageView
+                            android:id="@+id/iv_preview_avaria"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:scaleType="centerCrop" />
+                    </com.google.android.material.card.MaterialCardView>
                 </LinearLayout>
 
                 <com.google.android.material.button.MaterialButton

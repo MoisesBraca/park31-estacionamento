@@ -6,6 +6,7 @@ public class Transacao {
     private long horaSaida;
     private double valorPago;
     private double tarifaCobrada;
+    private String hardwareId;
 
     public Transacao(Veiculo veiculo, double valorPago, double tarifaCobrada) {
         this.placa = veiculo.getPlaca();
@@ -13,6 +14,7 @@ public class Transacao {
         this.horaSaida = veiculo.getHoraSaida();
         this.valorPago = valorPago;
         this.tarifaCobrada = tarifaCobrada;
+        this.hardwareId = "";
     }
 
     public Transacao(String placa, long horaEntrada, long horaSaida,
@@ -22,6 +24,17 @@ public class Transacao {
         this.horaSaida = horaSaida;
         this.valorPago = valorPago;
         this.tarifaCobrada = tarifaCobrada;
+        this.hardwareId = "";
+    }
+
+    public Transacao(String placa, long horaEntrada, long horaSaida,
+                     double valorPago, double tarifaCobrada, String hardwareId) {
+        this.placa = placa;
+        this.horaEntrada = horaEntrada;
+        this.horaSaida = horaSaida;
+        this.valorPago = valorPago;
+        this.tarifaCobrada = tarifaCobrada;
+        this.hardwareId = hardwareId;
     }
 
     public String getPlaca() {
@@ -46,5 +59,9 @@ public class Transacao {
 
     public long getTempoEstacionado() {
         return horaSaida - horaEntrada;
+    }
+
+    public String getHardwareId() {
+        return hardwareId;
     }
 }

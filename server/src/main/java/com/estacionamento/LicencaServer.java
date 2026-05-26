@@ -11,6 +11,8 @@ public class LicencaServer {
     private static final EstacionamentoRepository repository = new EstacionamentoRepository();
     private static final String SENHA_ADMIN = "estacionamento31";
     private static final String TOKEN_ADMIN = "token_" + UUID.randomUUID().toString().substring(0, 8);
+    private static final Map<String, Long> pixCriados = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final List<String> auditLogs = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     public static void main(String[] args) {
         // Railway define a porta na variável de ambiente PORT
@@ -45,6 +47,17 @@ public class LicencaServer {
             server.createContext("/api/update-config", new UpdateConfigHandler());
             server.createContext("/api/delete", new DeleteHandler());
             server.createContext("/api/send-config", new SendConfigHandler());
+            server.createContext("/api/pix/create", new PixCreateHandler());
+            server.createContext("/api/pix/status", new PixStatusHandler());
+            server.createContext("/api/audit/sync", new AuditSyncHandler());
+            server.createContext("/api/audit-logs", new AuditLogsGetHandler());
+            server.createContext("/api/transacoes/sync", new TransacoesSyncHandler());
+            server.createContext("/api/mensalistas/sync", new MensalistasSyncHandler());
+            server.createContext("/api/mensalistas/add", new MensalistaAddHandler());
+            server.createContext("/api/mensalistas/edit", new MensalistaEditHandler());
+            server.createContext("/api/mensalistas/delete", new MensalistaDeleteHandler());
+            server.createContext("/api/mensalistas/list", new MensalistaListHandler());
+            server.createContext("/api/faturamento", new FaturamentoGetHandler());
 
             server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool()); // Execução multi-thread assíncrona
             server.start();
@@ -443,6 +456,461 @@ public class LicencaServer {
         }
     }
 
+    // Handler para criar Pix Dinâmico
+    private static class PixCreateHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "*");
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+
+            if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            Map<String, String> params = parseRequestBody(exchange.getRequestBody());
+            String placa = params.get("placa");
+            String valorStr = params.get("valor");
+            double valor = valorStr != null ? Double.parseDouble(valorStr) : 0.0;
+
+            String txid = UUID.randomUUID().toString().replace("-", "").substring(0, 20);
+            pixCriados.put(txid, System.currentTimeMillis());
+
+            // Cria um payload Pix fictício mas formalmente válido para exibição do QR Code
+            String payload = "00020101021226830014br.gov.bcb.pix0136suporte@estacionamento31.com.br52040000530398654" 
+                + String.format(Locale.US, "%02d%.2f", String.format(Locale.US, "%.2f", valor).length(), valor) 
+                + "5802BR5925Park 31 Estacionamento6009SAOPAULO62290525" + txid + "6304";
+            
+            // Simular cálculo do CRC16 para o mock
+            int crc = 0xFFFF;
+            byte[] bytesPayload = payload.getBytes(StandardCharsets.ISO_8859_1);
+            for (byte b : bytesPayload) {
+                crc ^= (b & 0xFF) << 8;
+                for (int i = 0; i < 8; i++) {
+                    if ((crc & 0x8000) != 0) {
+                        crc = (crc << 1) ^ 0x1021;
+                    } else {
+                        crc <<= 1;
+                    }
+                }
+            }
+            String crcStr = String.format("%04X", crc & 0xFFFF);
+            payload = payload + crcStr;
+
+            String response = String.format(Locale.US, "{\"success\":true,\"txid\":\"%s\",\"payload\":\"%s\"}", txid, payload);
+            byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+    }
+
+    // Handler para checar status de Pix Dinâmico (simulador de sandbox)
+    private static class PixStatusHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "*");
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+
+            if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            Map<String, String> params = parseRequestBody(exchange.getRequestBody());
+            String txid = params.get("txid");
+            String status = "PENDENTE";
+
+            if (txid != null && pixCriados.containsKey(txid)) {
+                long criadoEm = pixCriados.get(txid);
+                // Se passou mais de 6 segundos, simular status pago (PAID) para demonstração automática
+                if (System.currentTimeMillis() - criadoEm > 6000) {
+                    status = "APROVADO";
+                }
+            }
+
+            String response = String.format("{\"status\":\"%s\"}", status);
+            byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+    }
+
+    // Handler para receber e sincronizar logs de auditoria dos terminais
+    private static class AuditSyncHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "*");
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+
+            if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            Map<String, String> params = parseRequestBody(exchange.getRequestBody());
+            String operador = params.get("operador");
+            String acao = params.get("acao");
+            String timestampStr = params.get("timestamp");
+            String detalhes = params.get("detalhes");
+
+            if (operador != null && acao != null) {
+                long ts = timestampStr != null ? Long.parseLong(timestampStr) : System.currentTimeMillis();
+                String dataStr = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss").format(new Date(ts));
+                String logLine = String.format("[%s] Operador: %s | Ação: %s | Detalhes: %s", dataStr, operador, acao, detalhes != null ? detalhes : "");
+                
+                auditLogs.add(0, logLine); // Adiciona no início da lista (mais recentes primeiro)
+                if (auditLogs.size() > 100) {
+                    auditLogs.remove(auditLogs.size() - 1);
+                }
+            }
+
+            String response = "{\"success\":true}";
+            byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+    }
+
+    // Handler para retornar todos os logs de auditoria para o painel web admin
+    private static class AuditLogsGetHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+
+            if (!exchange.getRequestMethod().equalsIgnoreCase("GET")) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            if (!autenticarRequisicao(exchange)) {
+                recusarNaoAutorizado(exchange);
+                return;
+            }
+
+            StringBuilder json = new StringBuilder("[");
+            for (int i = 0; i < auditLogs.size(); i++) {
+                // Escapar aspas duplas da linha do log para que o JSON fique válido
+                String escapedLog = auditLogs.get(i).replace("\"", "\\\"");
+                json.append("\"").append(escapedLog).append("\"");
+                if (i < auditLogs.size() - 1) json.append(",");
+            }
+            json.append("]");
+
+            byte[] bytes = json.toString().getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+    }
+
+    // Handler para sincronizar transações individuais enviadas pelos terminais
+    private static class TransacoesSyncHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "*");
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+
+            if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            Map<String, String> params = parseRequestBody(exchange.getRequestBody());
+            String placa = params.get("placa");
+            String entradaStr = params.get("entrada");
+            String saidaStr = params.get("saida");
+            String valorPagoStr = params.get("valorPago");
+            String tarifaCobradaStr = params.get("tarifaCobrada");
+            String hardwareId = params.get("hardwareId");
+
+            if (placa != null && entradaStr != null && saidaStr != null && hardwareId != null) {
+                long entrada = Long.parseLong(entradaStr);
+                long saida = Long.parseLong(saidaStr);
+                double valorPago = Double.parseDouble(valorPagoStr);
+                double tarifaCobrada = Double.parseDouble(tarifaCobradaStr);
+
+                repository.salvarTransacaoSincronizada(new Transacao(placa, entrada, saida, valorPago, tarifaCobrada, hardwareId));
+                
+                String response = "{\"success\":true}";
+                byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } else {
+                exchange.sendResponseHeaders(400, -1);
+            }
+        }
+    }
+
+    // Handler para retornar mensalistas em lote para sincronização local nos celulares
+    private static class MensalistasSyncHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+
+            if (!exchange.getRequestMethod().equalsIgnoreCase("GET") && !exchange.getRequestMethod().equalsIgnoreCase("POST")) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            List<MensalistaInfo> mensalistas = repository.listarMensalistas();
+            StringBuilder json = new StringBuilder("[");
+            for (int i = 0; i < mensalistas.size(); i++) {
+                MensalistaInfo m = mensalistas.get(i);
+                json.append(String.format(Locale.US,
+                    "{\"placa\":\"%s\",\"nomeCliente\":\"%s\",\"telefone\":\"%s\",\"vencimento\":%d,\"status\":\"%s\"}",
+                    m.getPlaca(), m.getNomeCliente(), m.getTelefone(), m.getVencimento(), m.getStatus()
+                ));
+                if (i < mensalistas.size() - 1) json.append(",");
+            }
+            json.append("]");
+
+            byte[] bytes = json.toString().getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+    }
+
+    // Handler para cadastrar mensalistas via web console
+    private static class MensalistaAddHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "*");
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+
+            if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            if (!autenticarRequisicao(exchange)) {
+                recusarNaoAutorizado(exchange);
+                return;
+            }
+
+            Map<String, String> params = parseRequestBody(exchange.getRequestBody());
+            String placa = params.get("placa");
+            String nome = params.get("nome");
+            String telefone = params.get("telefone");
+            String vencimentoStr = params.get("vencimento");
+
+            if (placa != null && nome != null && vencimentoStr != null) {
+                long vencimento = Long.parseLong(vencimentoStr);
+                repository.adicionarMensalista(placa, nome, telefone != null ? telefone : "", vencimento);
+                
+                String response = "{\"success\":true}";
+                byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } else {
+                exchange.sendResponseHeaders(400, -1);
+            }
+        }
+    }
+
+    // Handler para editar mensalistas via web console
+    private static class MensalistaEditHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "*");
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+
+            if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            if (!autenticarRequisicao(exchange)) {
+                recusarNaoAutorizado(exchange);
+                return;
+            }
+
+            Map<String, String> params = parseRequestBody(exchange.getRequestBody());
+            String placa = params.get("placa");
+            String status = params.get("status");
+            String vencimentoStr = params.get("vencimento");
+
+            if (placa != null && status != null && vencimentoStr != null) {
+                long vencimento = Long.parseLong(vencimentoStr);
+                repository.atualizarMensalista(placa, status, vencimento);
+                
+                String response = "{\"success\":true}";
+                byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } else {
+                exchange.sendResponseHeaders(400, -1);
+            }
+        }
+    }
+
+    // Handler para excluir mensalistas via web console
+    private static class MensalistaDeleteHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "*");
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+
+            if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            if (!autenticarRequisicao(exchange)) {
+                recusarNaoAutorizado(exchange);
+                return;
+            }
+
+            Map<String, String> params = parseRequestBody(exchange.getRequestBody());
+            String placa = params.get("placa");
+
+            if (placa != null) {
+                repository.excluirMensalista(placa);
+                
+                String response = "{\"success\":true}";
+                byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } else {
+                exchange.sendResponseHeaders(400, -1);
+            }
+        }
+    }
+
+    // Handler para listar mensalistas para a console web
+    private static class MensalistaListHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+
+            if (!exchange.getRequestMethod().equalsIgnoreCase("GET")) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            if (!autenticarRequisicao(exchange)) {
+                recusarNaoAutorizado(exchange);
+                return;
+            }
+
+            List<MensalistaInfo> mensalistas = repository.listarMensalistas();
+            StringBuilder json = new StringBuilder("[");
+            for (int i = 0; i < mensalistas.size(); i++) {
+                MensalistaInfo m = mensalistas.get(i);
+                json.append(String.format(Locale.US,
+                    "{\"id\":%d,\"placa\":\"%s\",\"nomeCliente\":\"%s\",\"telefone\":\"%s\",\"vencimento\":%d,\"status\":\"%s\"}",
+                    m.getId(), m.getPlaca(), m.getNomeCliente(), m.getTelefone(), m.getVencimento(), m.getStatus()
+                ));
+                if (i < mensalistas.size() - 1) json.append(",");
+            }
+            json.append("]");
+
+            byte[] bytes = json.toString().getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+    }
+
+    // Handler para buscar todas as transações para os gráficos e estatísticas
+    private static class FaturamentoGetHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+
+            if (!exchange.getRequestMethod().equalsIgnoreCase("GET")) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            if (!autenticarRequisicao(exchange)) {
+                recusarNaoAutorizado(exchange);
+                return;
+            }
+
+            List<Transacao> transacoes = repository.listarTodasTransacoes();
+            StringBuilder json = new StringBuilder("[");
+            for (int i = 0; i < transacoes.size(); i++) {
+                Transacao t = transacoes.get(i);
+                json.append(String.format(Locale.US,
+                    "{\"placa\":\"%s\",\"horaEntrada\":%d,\"horaSaida\":%d,\"valorPago\":%.2f,\"tarifaCobrada\":%.2f,\"hardwareId\":\"%s\"}",
+                    t.getPlaca(), t.getHoraEntrada(), t.getHoraSaida(), t.getValorPago(), t.getTarifaCobrada(), t.getHardwareId() != null ? t.getHardwareId() : ""
+                ));
+                if (i < transacoes.size() - 1) json.append(",");
+            }
+            json.append("]");
+
+            byte[] bytes = json.toString().getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+    }
+
     // Método utilitário para ler parâmetros JSON/Form do request body
     private static Map<String, String> parseRequestBody(InputStream is) throws IOException {
         Map<String, String> map = new HashMap<>();
@@ -518,958 +986,1184 @@ public class LicencaServer {
 
     // HTML/CSS/JS Embutido para renderizar a interface de controle no navegador
     private static String obterHtmlDashboard() {
-        return "<!DOCTYPE html>\n" +
-               "<html lang=\"pt-BR\">\n" +
-               "<head>\n" +
-               "    <meta charset=\"UTF-8\">\n" +
-               "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" +
-               "    <title>Painel Admin - Licenciamento Park ' 31</title>\n" +
-                "    <link href=\"https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap\" rel=\"stylesheet\">\n" +
-                "    <script src=\"https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js\"></script>\n" +
-               "    <style>\n" +
-               "        :root {\n" +
-               "            --bg: #0f0f1a;\n" +
-               "            --surface: rgba(25, 25, 45, 0.6);\n" +
-               "            --surface-hover: rgba(35, 35, 60, 0.8);\n" +
-               "            --primary: #5856d6;\n" +
-               "            --primary-glow: rgba(88, 86, 214, 0.4);\n" +
-               "            --success: #34c759;\n" +
-               "            --danger: #ff3b30;\n" +
-               "            --pending: #ff9500;\n" +
-               "            --text: #f0f0f5;\n" +
-               "            --text-muted: #8e8e93;\n" +
-               "        }\n" +
-               "        * {\n" +
-               "            box-sizing: border-box;\n" +
-               "            margin: 0;\n" +
-               "            padding: 0;\n" +
-               "            font-family: 'Outfit', sans-serif;\n" +
-               "        }\n" +
-               "        body {\n" +
-               "            background: var(--bg);\n" +
-               "            color: var(--text);\n" +
-               "            min-height: 100vh;\n" +
-               "            padding: 30px;\n" +
-               "            background-image: radial-gradient(circle at 10% 20%, rgba(88, 86, 214, 0.1) 0%, transparent 40%),\n" +
-               "                              radial-gradient(circle at 90% 80%, rgba(255, 149, 0, 0.05) 0%, transparent 40%);\n" +
-               "        }\n" +
-               "        header {\n" +
-               "            display: flex;\n" +
-               "            justify-content: space-between;\n" +
-               "            align-items: center;\n" +
-               "            margin-bottom: 40px;\n" +
-               "            border-bottom: 1px solid rgba(255,255,255,0.05);\n" +
-               "            padding-bottom: 20px;\n" +
-               "        }\n" +
-               "        .brand {\n" +
-               "            font-size: 28px;\n" +
-               "            font-weight: 800;\n" +
-               "            color: var(--text);\n" +
-               "            display: flex;\n" +
-               "            align-items: center;\n" +
-               "            gap: 10px;\n" +
-               "        }\n" +
-               "        .brand span { color: var(--primary); }\n" +
-               "        .status-badge {\n" +
-               "            background: rgba(52, 199, 89, 0.15);\n" +
-               "            color: var(--success);\n" +
-               "            padding: 6px 12px;\n" +
-               "            border-radius: 20px;\n" +
-               "            font-size: 13px;\n" +
-               "            font-weight: 600;\n" +
-               "            border: 1px solid rgba(52, 199, 89, 0.3);\n" +
-               "        }\n" +
-               "        .metrics-grid {\n" +
-               "            display: grid;\n" +
-               "            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));\n" +
-               "            gap: 20px;\n" +
-               "            margin-bottom: 40px;\n" +
-               "        }\n" +
-               "        .metric-card {\n" +
-               "            background: var(--surface);\n" +
-               "            backdrop-filter: blur(16px);\n" +
-               "            border: 1px solid rgba(255,255,255,0.05);\n" +
-               "            border-radius: 20px;\n" +
-               "            padding: 24px;\n" +
-               "            transition: transform 0.2s, box-shadow 0.2s;\n" +
-               "        }\n" +
-               "        .metric-card:hover {\n" +
-               "            transform: translateY(-2px);\n" +
-               "            border-color: rgba(88, 86, 214, 0.2);\n" +
-               "            box-shadow: 0 10px 20px rgba(0,0,0,0.3);\n" +
-               "        }\n" +
-               "        .metric-card h3 {\n" +
-               "            font-size: 14px;\n" +
-               "            color: var(--text-muted);\n" +
-               "            font-weight: 600;\n" +
-               "            text-transform: uppercase;\n" +
-               "            margin-bottom: 10px;\n" +
-               "        }\n" +
-               "        .metric-card .val {\n" +
-               "            font-size: 36px;\n" +
-               "            font-weight: 800;\n" +
-               "            color: var(--text);\n" +
-               "        }\n" +
-               "        .panel-container {\n" +
-               "            background: var(--surface);\n" +
-               "            backdrop-filter: blur(16px);\n" +
-               "            border: 1px solid rgba(255,255,255,0.05);\n" +
-               "            border-radius: 24px;\n" +
-               "            padding: 30px;\n" +
-               "            box-shadow: 0 20px 40px rgba(0,0,0,0.4);\n" +
-               "        }\n" +
-               "        .panel-header {\n" +
-               "            display: flex;\n" +
-               "            justify-content: space-between;\n" +
-               "            align-items: center;\n" +
-               "            margin-bottom: 25px;\n" +
-               "        }\n" +
-               "        .panel-header h2 {\n" +
-               "            font-size: 20px;\n" +
-               "            font-weight: 600;\n" +
-               "        }\n" +
-               "        .btn-refresh {\n" +
-               "            background: var(--primary);\n" +
-               "            color: white;\n" +
-               "            border: none;\n" +
-               "            padding: 10px 20px;\n" +
-               "            border-radius: 12px;\n" +
-               "            font-weight: 600;\n" +
-               "            cursor: pointer;\n" +
-               "            transition: opacity 0.2s;\n" +
-               "            box-shadow: 0 4px 12px var(--primary-glow);\n" +
-               "        }\n" +
-               "        .btn-refresh:hover { opacity: 0.9; }\n" +
-               "        table {\n" +
-               "            width: 100%;\n" +
-               "            border-collapse: collapse;\n" +
-               "            text-align: left;\n" +
-               "        }\n" +
-               "        th {\n" +
-               "            color: var(--text-muted);\n" +
-               "            font-size: 13px;\n" +
-               "            font-weight: 600;\n" +
-               "            text-transform: uppercase;\n" +
-               "            padding: 15px 20px;\n" +
-               "            border-bottom: 1px solid rgba(255,255,255,0.08);\n" +
-               "        }\n" +
-               "        td {\n" +
-               "            padding: 18px 20px;\n" +
-               "            border-bottom: 1px solid rgba(255,255,255,0.05);\n" +
-               "            font-size: 15px;\n" +
-               "            vertical-align: middle;\n" +
-               "        }\n" +
-               "        tr:last-child td {\n" +
-               "            border-bottom: none;\n" +
-               "        }\n" +
-               "        tr:hover td {\n" +
-               "            background: rgba(255,255,255,0.02);\n" +
-               "        }\n" +
-               "        .device-badge {\n" +
-               "            display: flex;\n" +
-               "            align-items: center;\n" +
-               "            gap: 10px;\n" +
-               "        }\n" +
-               "        .device-icon {\n" +
-               "            width: 36px;\n" +
-               "            height: 36px;\n" +
-               "            border-radius: 10px;\n" +
-               "            background: rgba(255,255,255,0.05);\n" +
-               "            display: flex;\n" +
-               "            align-items: center;\n" +
-               "            justify-content: center;\n" +
-               "            font-size: 18px;\n" +
-               "        }\n" +
-               "        .status-pill {\n" +
-               "            padding: 6px 12px;\n" +
-               "            border-radius: 12px;\n" +
-               "            font-size: 12px;\n" +
-               "            font-weight: 600;\n" +
-               "            display: inline-block;\n" +
-               "        }\n" +
-               "        .status-pill.ativo {\n" +
-               "            background: rgba(52, 199, 89, 0.15);\n" +
-               "            color: var(--success);\n" +
-               "        }\n" +
-               "        .status-pill.bloqueado {\n" +
-               "            background: rgba(255, 59, 48, 0.15);\n" +
-               "            color: var(--danger);\n" +
-               "        }\n" +
-               "        .status-pill.pendente {\n" +
-               "            background: rgba(255, 149, 0, 0.15);\n" +
-               "            color: var(--pending);\n" +
-               "        }\n" +
-               "        .actions {\n" +
-               "            display: flex;\n" +
-               "            gap: 10px;\n" +
-               "        }\n" +
-               "        .btn-action {\n" +
-               "            border: none;\n" +
-               "            padding: 8px 14px;\n" +
-               "            border-radius: 8px;\n" +
-               "            font-weight: 600;\n" +
-               "            cursor: pointer;\n" +
-               "            font-size: 13px;\n" +
-               "            transition: opacity 0.2s;\n" +
-               "        }\n" +
-               "        .btn-action.approve {\n" +
-               "            background: var(--success);\n" +
-               "            color: white;\n" +
-               "        }\n" +
-               "        .btn-action.block {\n" +
-               "            background: var(--danger);\n" +
-               "            color: white;\n" +
-               "        }\n" +
-               "        .btn-action.edit {\n" +
-               "            background: rgba(88, 86, 214, 0.15);\n" +
-               "            color: #8a88f7;\n" +
-               "            border: 1px solid rgba(88, 86, 214, 0.3);\n" +
-               "        }\n" +
-               "        .btn-action.delete {\n" +
-               "            background: rgba(255, 59, 48, 0.15);\n" +
-               "            color: #ff5b50;\n" +
-               "            border: 1px solid rgba(255, 59, 48, 0.3);\n" +
-               "        }\n" +
-               "        .btn-action.send {\n" +
-               "            background: rgba(52, 152, 219, 0.15);\n" +
-               "            color: #54a0ff;\n" +
-               "            border: 1px solid rgba(52, 152, 219, 0.3);\n" +
-               "        }\n" +
-               "        .btn-action:hover {\n" +
-               "            opacity: 0.9;\n" +
-               "        }\n" +
-               "        .empty-state {\n" +
-               "            text-align: center;\n" +
-               "            padding: 40px 0;\n" +
-               "            color: var(--text-muted);\n" +
-               "            font-size: 16px;\n" +
-               "        }\n" +
-               "\n" +
-               "        /* Modal Overlay and Form Card */\n" +
-               "        .modal-overlay {\n" +
-               "            position: fixed;\n" +
-               "            top: 0;\n" +
-               "            left: 0;\n" +
-               "            width: 100vw;\n" +
-               "            height: 100vh;\n" +
-               "            background: rgba(10, 10, 20, 0.85);\n" +
-               "            backdrop-filter: blur(10px);\n" +
-               "            display: flex;\n" +
-               "            align-items: center;\n" +
-               "            justify-content: center;\n" +
-               "            z-index: 1000;\n" +
-               "            transition: opacity 0.3s ease;\n" +
-               "        }\n" +
-               "        .modal-card {\n" +
-               "            background: rgba(25, 25, 45, 0.95);\n" +
-               "            border: 1px solid rgba(255,255,255,0.08);\n" +
-               "            border-radius: 24px;\n" +
-               "            padding: 30px;\n" +
-               "            width: 90%;\n" +
-               "            max-width: 550px;\n" +
-               "            box-shadow: 0 20px 50px rgba(0,0,0,0.6);\n" +
-               "            animation: scaleUp 0.3s ease;\n" +
-               "        }\n" +
-               "        @keyframes scaleUp {\n" +
-               "            from { transform: scale(0.9); opacity: 0; }\n" +
-               "            to { transform: scale(1); opacity: 1; }\n" +
-               "        }\n" +
-               "        .modal-card h3 {\n" +
-               "            font-size: 22px;\n" +
-               "            font-weight: 600;\n" +
-               "            margin-bottom: 5px;\n" +
-               "        }\n" +
-               "        .form-group {\n" +
-               "            margin-bottom: 18px;\n" +
-               "            display: flex;\n" +
-               "            flex-direction: column;\n" +
-               "            gap: 6px;\n" +
-               "            text-align: left;\n" +
-               "        }\n" +
-               "        .form-group label {\n" +
-               "            font-size: 13px;\n" +
-               "            color: var(--text-muted);\n" +
-               "            font-weight: 600;\n" +
-               "            text-transform: uppercase;\n" +
-               "        }\n" +
-               "        .form-group input {\n" +
-               "            width: 100%;\n" +
-               "            background: rgba(255,255,255,0.05);\n" +
-               "            border: 1px solid rgba(255,255,255,0.1);\n" +
-               "            color: white;\n" +
-               "            padding: 12px 16px;\n" +
-               "            border-radius: 12px;\n" +
-               "            font-size: 15px;\n" +
-               "            outline: none;\n" +
-               "            transition: border-color 0.2s;\n" +
-               "        }\n" +
-               "        .form-group input:focus {\n" +
-               "            border-color: var(--primary);\n" +
-               "        }\n" +
-               "        .form-row {\n" +
-               "            display: grid;\n" +
-               "            grid-template-columns: 1fr;\n" +
-               "            gap: 15px;\n" +
-               "        }\n" +
-               "        .form-grid-3 {\n" +
-               "            display: grid;\n" +
-               "            grid-template-columns: 1.2fr 1fr 1fr;\n" +
-               "            gap: 12px;\n" +
-               "        }\n" +
-               "        .modal-actions {\n" +
-               "            display: flex;\n" +
-               "            justify-content: flex-end;\n" +
-               "            gap: 12px;\n" +
-               "            margin-top: 25px;\n" +
-               "        }\n" +
-               "        .btn-cancel {\n" +
-               "            background: transparent;\n" +
-               "            border: 1px solid rgba(255,255,255,0.1);\n" +
-               "            color: var(--text);\n" +
-               "            padding: 12px 20px;\n" +
-               "            border-radius: 12px;\n" +
-               "            font-weight: 600;\n" +
-               "            cursor: pointer;\n" +
-               "            transition: background 0.2s;\n" +
-               "        }\n" +
-               "        .btn-cancel:hover {\n" +
-               "            background: rgba(255,255,255,0.05);\n" +
-               "        }\n" +
-               "        .btn-save {\n" +
-               "            background: var(--primary);\n" +
-               "            border: none;\n" +
-               "            color: white;\n" +
-               "            padding: 12px 20px;\n" +
-               "            border-radius: 12px;\n" +
-               "            font-weight: 600;\n" +
-               "            cursor: pointer;\n" +
-               "            transition: opacity 0.2s;\n" +
-               "            box-shadow: 0 4px 12px var(--primary-glow);\n" +
-               "        }\n" +
-                "        .btn-save:hover {\n" +
-                "            opacity: 0.9;\n" +
-                "        }\n" +
-                "\n" +
-                "        /* Toast Notifications */\n" +
-                "        .toast-container {\n" +
-                "            position: fixed;\n" +
-                "            top: 20px;\n" +
-                "            right: 20px;\n" +
-                "            z-index: 9999;\n" +
-                "            display: flex;\n" +
-                "            flex-direction: column;\n" +
-                "            gap: 10px;\n" +
-                "        }\n" +
-                "        .toast {\n" +
-                "            padding: 14px 20px;\n" +
-                "            border-radius: 12px;\n" +
-                "            font-weight: 600;\n" +
-                "            font-size: 14px;\n" +
-                "            color: #fff;\n" +
-                "            backdrop-filter: blur(12px);\n" +
-                "            box-shadow: 0 8px 24px rgba(0,0,0,0.3);\n" +
-                "            animation: slideInRight 0.3s ease;\n" +
-                "            min-width: 280px;\n" +
-                "            max-width: 450px;\n" +
-                "        }\n" +
-                "        @keyframes slideInRight {\n" +
-                "            from { transform: translateX(100%); opacity: 0; }\n" +
-                "            to { transform: translateX(0); opacity: 1; }\n" +
-                "        }\n" +
-                "        @keyframes slideOutRight {\n" +
-                "            from { transform: translateX(0); opacity: 1; }\n" +
-                "            to { transform: translateX(100%); opacity: 0; }\n" +
-                "        }\n" +
-                "        .toast.success { background: rgba(52,199,89,0.92); }\n" +
-                "        .toast.error { background: rgba(255,59,48,0.92); }\n" +
-                "        .toast.info { background: rgba(88,86,214,0.92); }\n" +
-                "        .toast.warning { background: rgba(255,149,0,0.92); }\n" +
-                "\n" +
-                "        /* Search and Filter Bar */\n" +
-                "        .toolbar {\n" +
-                "            display: flex;\n" +
-                "            gap: 12px;\n" +
-                "            margin-bottom: 20px;\n" +
-                "            flex-wrap: wrap;\n" +
-                "        }\n" +
-                "        .search-box {\n" +
-                "            display: flex;\n" +
-                "            align-items: center;\n" +
-                "            background: rgba(255,255,255,0.05);\n" +
-                "            border: 1px solid rgba(255,255,255,0.1);\n" +
-                "            border-radius: 12px;\n" +
-                "            padding: 0 16px;\n" +
-                "            flex: 1;\n" +
-                "            min-width: 200px;\n" +
-                "        }\n" +
-                "        .search-box input {\n" +
-                "            background: none;\n" +
-                "            border: none;\n" +
-                "            color: #fff;\n" +
-                "            padding: 12px 10px;\n" +
-                "            font-size: 14px;\n" +
-                "            width: 100%;\n" +
-                "            outline: none;\n" +
-                "            font-family: 'Outfit', sans-serif;\n" +
-                "        }\n" +
-                "        .search-box input::placeholder { color: var(--text-muted); }\n" +
-                "        .search-box .search-icon { color: var(--text-muted); font-size: 16px; }\n" +
-                "\n" +
-                "        .filter-select {\n" +
-                "            background: rgba(255,255,255,0.05);\n" +
-                "            border: 1px solid rgba(255,255,255,0.1);\n" +
-                "            border-radius: 12px;\n" +
-                "            color: #fff;\n" +
-                "            padding: 12px 16px;\n" +
-                "            font-size: 14px;\n" +
-                "            outline: none;\n" +
-                "            cursor: pointer;\n" +
-                "            font-family: 'Outfit', sans-serif;\n" +
-                "        }\n" +
-                "        .filter-select option { background: #1a1a2e; color: #fff; }\n" +
-                "\n" +
-                "        .btn-outline {\n" +
-                "            background: rgba(255,255,255,0.05);\n" +
-                "            border: 1px solid rgba(255,255,255,0.1);\n" +
-                "            color: var(--text);\n" +
-                "            padding: 10px 18px;\n" +
-                "            border-radius: 12px;\n" +
-                "            font-weight: 600;\n" +
-                "            cursor: pointer;\n" +
-                "            font-size: 13px;\n" +
-                "            transition: all 0.2s;\n" +
-                "            font-family: 'Outfit', sans-serif;\n" +
-                "        }\n" +
-                "        .btn-outline:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); }\n" +
-                "\n" +
-                "        /* Sortable table headers */\n" +
-                "        th.sortable { cursor: pointer; user-select: none; }\n" +
-                "        th.sortable:hover { color: var(--text); }\n" +
-                "        th.sortable::after { content: \" \\2195\"; opacity: 0.4; font-size: 11px; }\n" +
-                "        th.sortable.asc::after { content: \" \\2191\"; opacity: 1; }\n" +
-                "        th.sortable.desc::after { content: \" \\2193\"; opacity: 1; }\n" +
-                "\n" +
-                "        /* Expiration badges */\n" +
-                "        .exp-critical { color: var(--danger) !important; font-weight: 700 !important; }\n" +
-                "        .exp-warning { color: var(--pending) !important; }\n" +
-                "        .exp-ok { color: var(--success) !important; }\n" +
-                "\n" +
-                "        tr.critical-row td { background: rgba(255,59,48,0.05) !important; }\n" +
-                "        tr.critical-row:hover td { background: rgba(255,59,48,0.1) !important; }\n" +
-                "\n" +
-                "        /* Skeleton loading */\n" +
-                "        .skeleton-bar {\n" +
-                "            height: 14px;\n" +
-                "            background: rgba(255,255,255,0.06);\n" +
-                "            border-radius: 6px;\n" +
-                "            animation: pulse 1.5s ease-in-out infinite;\n" +
-                "            max-width: 200px;\n" +
-                "        }\n" +
-                "        @keyframes pulse {\n" +
-                "            0%, 100% { opacity: 0.4; }\n" +
-                "            50% { opacity: 0.8; }\n" +
-                "        }\n" +
-                "\n" +
-                "        /* Online indicator */\n" +
-                "        .online-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }\n" +
-                "        .online-dot.online { background: var(--success); }\n" +
-                "        .online-dot.offline { background: var(--danger); }\n" +
-                "        .online-dot.unknown { background: var(--text-muted); }\n" +
-                "\n" +
-                "        /* Charts section */\n" +
-                "        .charts-grid {\n" +
-                "            display: grid;\n" +
-                "            grid-template-columns: 1fr 1fr;\n" +
-                "            gap: 20px;\n" +
-                "            margin-bottom: 30px;\n" +
-                "        }\n" +
-                "        .chart-card {\n" +
-                "            background: var(--surface);\n" +
-                "            backdrop-filter: blur(16px);\n" +
-                "            border: 1px solid rgba(255,255,255,0.05);\n" +
-                "            border-radius: 20px;\n" +
-                "            padding: 24px;\n" +
-                "        }\n" +
-                "        .chart-card h3 {\n" +
-                "            font-size: 14px;\n" +
-                "            color: var(--text-muted);\n" +
-                "            font-weight: 600;\n" +
-                "            text-transform: uppercase;\n" +
-                "            margin-bottom: 15px;\n" +
-                "        }\n" +
-                "        .chart-card canvas { max-height: 220px; }\n" +
-                "\n" +
-                "        .last-seen { font-size: 12px; color: var(--text-muted); }\n" +
-                "\n" +
-                "        /* Responsive */\n" +
-                "        @media (max-width: 768px) {\n" +
-                "            body { padding: 15px; }\n" +
-                "            .metrics-grid { grid-template-columns: 1fr 1fr; }\n" +
-                "            .charts-grid { grid-template-columns: 1fr; }\n" +
-                "            .toolbar { flex-direction: column; }\n" +
-                "            .search-box { min-width: auto; }\n" +
-                "            .panel-container { padding: 15px; }\n" +
-                "            table { font-size: 13px; }\n" +
-                "            td, th { padding: 12px 10px; }\n" +
-                "            .actions { flex-wrap: wrap; }\n" +
-                "        }\n" +
-                "        @media (max-width: 480px) {\n" +
-                "            .metrics-grid { grid-template-columns: 1fr; }\n" +
-                "            .panel-header { flex-direction: column; gap: 15px; }\n" +
-                "        }\n" +
-                "\n" +
-                "        /* Tela de Login */\n" +
-                "        #login-screen {\n" +
-                "            position: fixed;\n" +
-                "            top: 0;\n" +
-                "            left: 0;\n" +
-                "            width: 100vw;\n" +
-                "            height: 100vh;\n" +
-                "            display: flex;\n" +
-                "            align-items: center;\n" +
-                "            justify-content: center;\n" +
-                "            background: var(--bg);\n" +
-                "            z-index: 2000;\n" +
-                "        }\n" +
-                "        .login-card {\n" +
-                "            background: var(--surface);\n" +
-                "            backdrop-filter: blur(16px);\n" +
-                "            border: 1px solid rgba(255,255,255,0.08);\n" +
-                "            border-radius: 24px;\n" +
-                "            padding: 40px;\n" +
-                "            width: 90%;\n" +
-                "            max-width: 400px;\n" +
-                "            box-shadow: 0 20px 50px rgba(0,0,0,0.5);\n" +
-                "        }\n" +
-                "    </style>\n" +
-                "</head>\n" +
-                "<body>\n" +
-                "    <!-- Tela de Login -->\n" +
-                "    <div id=\"login-screen\">\n" +
-                "        <div class=\"login-card\">\n" +
-                "            <div class=\"brand\" style=\"justify-content:center;margin-bottom:30px\">🅿️ Park <span>' 31</span> Admin</div>\n" +
-                "            <div class=\"form-group\">\n" +
-                "                <label>Senha de Administrador</label>\n" +
-                "                <input type=\"password\" id=\"senha-input\" placeholder=\"Digite a senha...\" autocomplete=\"off\" />\n" +
-                "            </div>\n" +
-                "            <div style=\"margin-top:25px\">\n" +
-                "                <button class=\"btn-save\" id=\"login-btn\" style=\"width:100%;padding:14px\">Acessar Painel</button>\n" +
-                "            </div>\n" +
-                "            <div id=\"login-error\" style=\"margin-top:12px;color:var(--danger);font-size:14px;text-align:center;display:none\">Senha incorreta!</div>\n" +
-                "        </div>\n" +
-                "    </div>\n" +
+        return obterHtmlDashboardPart1() + obterHtmlDashboardPart2();
+    }
 
-               "    <!-- Dashboard Container -->\n" +
-               "    <div id=\"dashboard\" style=\"display:none\">\n" +
-               "        <header>\n" +
-               "            <div class=\"brand\">🅿️ Park <span>' 31</span> <span style=\"font-size:16px;font-weight:400;color:var(--text-muted);margin-left:8px\">Painel de Licenciamento</span></div>\n" +
-               "            <div style=\"display:flex;align-items:center;gap:15px\">\n" +
-               "                <span class=\"status-badge\" id=\"server-status\">● Online</span>\n" +
-               "                <button class=\"btn-outline\" id=\"logout-btn\">Sair</button>\n" +
-               "            </div>\n" +
-               "        </header>\n" +
-               "\n" +
-               "        <div class=\"metrics-grid\" id=\"metrics-grid\">\n" +
-               "            <div class=\"metric-card\"><h3>📱 Total Dispositivos</h3><div class=\"val\" id=\"total-devices\">0</div></div>\n" +
-               "            <div class=\"metric-card\"><h3>✅ Ativos</h3><div class=\"val\" id=\"active-devices\" style=\"color:var(--success)\">0</div></div>\n" +
-               "            <div class=\"metric-card\"><h3>⛔ Bloqueados</h3><div class=\"val\" id=\"blocked-devices\" style=\"color:var(--danger)\">0</div></div>\n" +
-               "            <div class=\"metric-card\"><h3>⏳ Pendentes</h3><div class=\"val\" id=\"pending-devices\" style=\"color:var(--pending)\">0</div></div>\n" +
-               "        </div>\n" +
-               "\n" +
-               "        <div class=\"charts-grid\">\n" +
-               "            <div class=\"chart-card\">\n" +
-               "                <h3>📊 Status dos Dispositivos</h3>\n" +
-               "                <canvas id=\"statusChart\"></canvas>\n" +
-               "            </div>\n" +
-               "            <div class=\"chart-card\">\n" +
-               "                <h3>📈 Registros por Dia</h3>\n" +
-               "                <canvas id=\"timelineChart\"></canvas>\n" +
-               "            </div>\n" +
-               "        </div>\n" +
-               "\n" +
-               "        <div class=\"panel-container\">\n" +
-               "            <div class=\"panel-header\">\n" +
-               "                <h2>📋 Dispositivos</h2>\n" +
-               "                <button class=\"btn-refresh\" id=\"refresh-btn\">↻ Atualizar</button>\n" +
-               "            </div>\n" +
-               "            <div class=\"toolbar\">\n" +
-               "                <div class=\"search-box\">\n" +
-               "                    <span class=\"search-icon\">🔍</span>\n" +
-               "                    <input type=\"text\" id=\"search-input\" placeholder=\"Buscar por hardware ID, cliente, dispositivo...\" />\n" +
-               "                </div>\n" +
-               "                <select class=\"filter-select\" id=\"filter-select\">\n" +
-               "                    <option value=\"todos\">Todos</option>\n" +
-               "                    <option value=\"ATIVO\">✅ Ativos</option>\n" +
-               "                    <option value=\"BLOQUEADO\">⛔ Bloqueados</option>\n" +
-               "                    <option value=\"PENDENTE\">⏳ Pendentes</option>\n" +
-               "                </select>\n" +
-               "            </div>\n" +
-               "            <table>\n" +
-               "                <thead>\n" +
-               "                    <tr>\n" +
-               "                        <th class=\"sortable\" data-col=\"hardwareId\">Hardware ID</th>\n" +
-               "                        <th class=\"sortable\" data-col=\"nomeAparelho\">Dispositivo</th>\n" +
-               "                        <th class=\"sortable\" data-col=\"soTipo\">SO</th>\n" +
-               "                        <th class=\"sortable\" data-col=\"nomeCliente\">Cliente</th>\n" +
-               "                        <th class=\"sortable\" data-col=\"dataRegistro\">Registro</th>\n" +
-               "                        <th class=\"sortable\" data-col=\"dataExpiracao\">Expiração</th>\n" +
-               "                        <th class=\"sortable\" data-col=\"status\">Status</th>\n" +
-               "                        <th class=\"sortable\" data-col=\"ultimoPing\">Último Ping</th>\n" +
-               "                        <th>Ações</th>\n" +
-               "                    </tr>\n" +
-               "                </thead>\n" +
-               "                <tbody id=\"devices-tbody\">\n" +
-               "                    <tr><td colspan=\"9\" class=\"empty-state\">🔄 Carregando...</td></tr>\n" +
-               "                </tbody>\n" +
-               "            </table>\n" +
-               "        </div>\n" +
-               "    </div>\n" +
-               "\n" +
-               "    <div class=\"toast-container\" id=\"toast-container\"></div>\n" +
-               "\n" +
-               "    <script>\n" +
-               "        // --- GLOBAIS ---\n" +
-               "        let adminToken = localStorage.getItem('adminToken');\n" +
-               "        let devices = [];\n" +
-               "        let sortState = { col: 'dataRegistro', dir: 'desc' };\n" +
-               "        let statusChartInstance = null;\n" +
-               "        let timelineChartInstance = null;\n" +
-               "\n" +
-               "        // --- TOAST ---\n" +
-               "        function showToast(msg, type = 'info') {\n" +
-               "            const container = document.getElementById('toast-container');\n" +
-               "            const toast = document.createElement('div');\n" +
-               "            toast.className = 'toast ' + type;\n" +
-               "            toast.textContent = msg;\n" +
-               "            container.appendChild(toast);\n" +
-               "            setTimeout(() => { toast.style.animation = 'slideOutRight 0.3s ease forwards'; setTimeout(() => toast.remove(), 300); }, 3000);\n" +
-               "        }\n" +
-               "\n" +
-               "        // --- LOGIN ---\n" +
-               "        document.getElementById('login-btn').addEventListener('click', () => {\n" +
-               "            const senha = document.getElementById('senha-input').value;\n" +
-               "            fetch('/api/login', {\n" +
-               "                method: 'POST',\n" +
-               "                headers: { 'Content-Type': 'application/json' },\n" +
-               "                body: JSON.stringify({ senha })\n" +
-               "            }).then(r => r.json()).then(d => {\n" +
-               "                if (d.success) {\n" +
-               "                    adminToken = d.token;\n" +
-               "                    localStorage.setItem('adminToken', adminToken);\n" +
-               "                    document.getElementById('login-screen').style.display = 'none';\n" +
-               "                    document.getElementById('dashboard').style.display = 'block';\n" +
-               "                    carregarDados();\n" +
-               "                } else {\n" +
-               "                    document.getElementById('login-error').style.display = 'block';\n" +
-               "                    setTimeout(() => document.getElementById('login-error').style.display = 'none', 3000);\n" +
-               "                }\n" +
-               "            }).catch(() => showToast('Erro de conexão com o servidor', 'error'));\n" +
-               "        });\n" +
-               "\n" +
-               "        document.getElementById('senha-input').addEventListener('keydown', e => {\n" +
-               "            if (e.key === 'Enter') document.getElementById('login-btn').click();\n" +
-               "        });\n" +
-               "\n" +
-               "        // Autologin se token válido existir\n" +
-               "        if (adminToken) {\n" +
-               "            fetch('/api/devices', { headers: { 'X-Admin-Token': adminToken } })\n" +
-               "                .then(r => {\n" +
-               "                    if (r.status === 200) {\n" +
-               "                        document.getElementById('login-screen').style.display = 'none';\n" +
-               "                        document.getElementById('dashboard').style.display = 'block';\n" +
-               "                        carregarDados();\n" +
-               "                    } else {\n" +
-               "                        localStorage.removeItem('adminToken');\n" +
-               "                    }\n" +
-               "                }).catch(() => {});\n" +
-               "        }\n" +
-               "\n" +
-               "        document.getElementById('logout-btn').addEventListener('click', () => {\n" +
-               "            adminToken = null;\n" +
-               "            localStorage.removeItem('adminToken');\n" +
-               "            document.getElementById('dashboard').style.display = 'none';\n" +
-               "            document.getElementById('login-screen').style.display = 'flex';\n" +
-               "            document.getElementById('senha-input').value = '';\n" +
-               "        });\n" +
-               "\n" +
-               "        // --- DADOS ---\n" +
-               "        function carregarDados() {\n" +
-               "            const headers = { 'X-Admin-Token': adminToken };\n" +
-               "            fetch('/api/devices', { headers })\n" +
-               "                .then(r => r.json())\n" +
-               "                .then(d => {\n" +
-               "                    devices = d;\n" +
-               "                    atualizarTabela();\n" +
-               "                    atualizarMetricas();\n" +
-               "                    atualizarGraficos();\n" +
-               "                }).catch(() => showToast('Erro ao carregar dispositivos', 'error'));\n" +
-               "        }\n" +
-               "\n" +
-               "        document.getElementById('refresh-btn').addEventListener('click', carregarDados);\n" +
-               "\n" +
-               "        // --- ATUALIZAR MÉTRICAS ---\n" +
-               "        function atualizarMetricas() {\n" +
-               "            const total = devices.length;\n" +
-               "            const ativos = devices.filter(d => d.status === 'ATIVO').length;\n" +
-               "            const bloqueados = devices.filter(d => d.status === 'BLOQUEADO').length;\n" +
-               "            const pendentes = devices.filter(d => d.status === 'PENDENTE').length;\n" +
-               "            document.getElementById('total-devices').textContent = total;\n" +
-               "            document.getElementById('active-devices').textContent = ativos;\n" +
-               "            document.getElementById('blocked-devices').textContent = bloqueados;\n" +
-               "            document.getElementById('pending-devices').textContent = pendentes;\n" +
-               "        }\n" +
-               "\n" +
-               "        // --- TABELA ---\n" +
-               "        function atualizarTabela() {\n" +
-               "            const search = document.getElementById('search-input').value.toLowerCase();\n" +
-               "            const filter = document.getElementById('filter-select').value;\n" +
-               "\n" +
-               "            let filtered = devices.filter(d => {\n" +
-               "                if (filter !== 'todos' && d.status !== filter) return false;\n" +
-               "                return (d.hardwareId && d.hardwareId.toLowerCase().includes(search)) ||\n" +
-               "                       (d.nomeAparelho && d.nomeAparelho.toLowerCase().includes(search)) ||\n" +
-               "                       (d.nomeCliente && d.nomeCliente.toLowerCase().includes(search));\n" +
-               "            });\n" +
-               "\n" +
-               "            const sorted = [...filtered].sort((a, b) => {\n" +
-               "                let va = a[sortState.col], vb = b[sortState.col];\n" +
-               "                if (typeof va === 'string') va = va.toLowerCase();\n" +
-               "                if (typeof vb === 'string') vb = vb.toLowerCase();\n" +
-               "                if (va < vb) return sortState.dir === 'asc' ? -1 : 1;\n" +
-               "                if (va > vb) return sortState.dir === 'asc' ? 1 : -1;\n" +
-               "                return 0;\n" +
-               "            });\n" +
-               "\n" +
-               "            const tbody = document.getElementById('devices-tbody');\n" +
-               "            if (sorted.length === 0) {\n" +
-               "                tbody.innerHTML = '<tr><td colspan=\"9\" class=\"empty-state\">Nenhum dispositivo encontrado</td></tr>';\n" +
-               "                return;\n" +
-               "            }\n" +
-               "\n" +
-               "            tbody.innerHTML = sorted.map(d => {\n" +
-               "                const isOnline = (Date.now() - d.ultimoPing) < 60000;\n" +
-               "                const regDate = new Date(d.dataRegistro).toLocaleString('pt-BR');\n" +
-               "                const expDate = d.dataExpiracao > 0 ? new Date(d.dataExpiracao).toLocaleString('pt-BR') : '—';\n" +
-               "                const expClass = d.dataExpiracao > 0 ? (d.dataExpiracao - Date.now() < 86400000 ? 'exp-critical' : (d.dataExpiracao - Date.now() < 604800000 ? 'exp-warning' : 'exp-ok')) : '';\n" +
-               "                const lastPingStr = d.ultimoPing > 0 ? new Date(d.ultimoPing).toLocaleString('pt-BR') : '—';\n" +
-               "                const sopIcon = d.soTipo && d.soTipo.toLowerCase().includes('android') ? '🤖' : '💻';\n" +
-               "                return `<tr class=\"${d.dataExpiracao > 0 && d.dataExpiracao - Date.now() < 86400000 ? 'critical-row' : ''}\">\n" +
-               "                    <td><div class=\"device-badge\"><span class=\"online-dot ${isOnline ? 'online' : 'offline'}\"></span><code style=\"background:rgba(255,255,255,0.05);padding:4px 8px;border-radius:6px;font-size:13px\">${d.hardwareId}</code></div></td>\n" +
-               "                    <td>${sopIcon} ${d.nomeAparelho}</td>\n" +
-               "                    <td>${d.soTipo}</td>\n" +
-               "                    <td>${d.nomeCliente || '—'}</td>\n" +
-               "                    <td style=\"font-size:13px;color:var(--text-muted)\">${regDate}</td>\n" +
-               "                    <td class=\"${expClass}\" style=\"font-size:13px\">${expDate}</td>\n" +
-               "                    <td><span class=\"status-pill ${d.status.toLowerCase()}\">${d.status}</span></td>\n" +
-               "                    <td><span class=\"last-seen\">${lastPingStr} ${isOnline ? '<span style=\"color:var(--success)\">●</span>' : '<span style=\"color:var(--danger)\">○</span>'}</span></td>\n" +
-               "                    <td>\n" +
-               "                        <div class=\"actions\">\n" +
-               "                            ${d.status === 'PENDENTE' ? `<button class=\"btn-action approve\" onclick=\"aprovar('${d.hardwareId}')\">✅ Aprovar</button>` : ''}\n" +
-               "                            ${d.status === 'ATIVO' ? `<button class=\"btn-action block\" onclick=\"bloquear('${d.hardwareId}')\">⛔ Bloquear</button>` : ''}\n" +
-               "                            <button class=\"btn-action edit\" onclick=\"abrirEdicao('${d.hardwareId}')\">✎ Editar</button>\n" +
-               "                            <button class=\"btn-action send\" onclick=\"enviarConfig('${d.hardwareId}')\">📤 Enviar</button>\n" +
-               "                            <button class=\"btn-action delete\" onclick=\"excluir('${d.hardwareId}')\">🗑 Excluir</button>\n" +
-               "                        </div>\n" +
-               "                    </td>\n" +
-               "                </tr>`;\n" +
-               "            }).join('');\n" +
-               "        }\n" +
-               "\n" +
-               "        document.getElementById('search-input').addEventListener('input', atualizarTabela);\n" +
-               "        document.getElementById('filter-select').addEventListener('change', atualizarTabela);\n" +
-               "\n" +
-               "        // Sortable headers\n" +
-               "        document.querySelectorAll('th.sortable').forEach(th => {\n" +
-               "            th.addEventListener('click', () => {\n" +
-               "                const col = th.dataset.col;\n" +
-               "                if (sortState.col === col) sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';\n" +
-               "                else { sortState.col = col; sortState.dir = 'asc'; }\n" +
-               "                document.querySelectorAll('th.sortable').forEach(h => h.classList.remove('asc', 'desc'));\n" +
-               "                th.classList.add(sortState.dir);\n" +
-               "                atualizarTabela();\n" +
-               "            });\n" +
-               "        });\n" +
-               "\n" +
-               "        // --- GRÁFICOS ---\n" +
-               "        function atualizarGraficos() {\n" +
-               "            const ativos = devices.filter(d => d.status === 'ATIVO').length;\n" +
-               "            const bloqueados = devices.filter(d => d.status === 'BLOQUEADO').length;\n" +
-               "            const pendentes = devices.filter(d => d.status === 'PENDENTE').length;\n" +
-               "\n" +
-               "            if (statusChartInstance) statusChartInstance.destroy();\n" +
-               "            const ctx1 = document.getElementById('statusChart').getContext('2d');\n" +
-               "            statusChartInstance = new Chart(ctx1, {\n" +
-               "                type: 'doughnut',\n" +
-               "                data: {\n" +
-               "                    labels: ['Ativos', 'Bloqueados', 'Pendentes'],\n" +
-               "                    datasets: [{\n" +
-               "                        data: [ativos, bloqueados, pendentes],\n" +
-               "                        backgroundColor: ['#34c759', '#ff3b30', '#ff9500'],\n" +
-               "                        borderWidth: 0\n" +
-               "                    }]\n" +
-               "                },\n" +
-               "                options: {\n" +
-               "                    responsive: true,\n" +
-               "                    plugins: { legend: { labels: { color: '#8e8e93', font: { family: 'Outfit' } } } }\n" +
-               "                }\n" +
-               "            });\n" +
-               "\n" +
-               "            // Timeline chart — agrupando por dia\n" +
-               "            if (timelineChartInstance) timelineChartInstance.destroy();\n" +
-               "            const ctx2 = document.getElementById('timelineChart').getContext('2d');\n" +
-               "            const grupos = {};\n" +
-               "            const hoje = new Date();\n" +
-               "            for (let i = 13; i >= 0; i--) {\n" +
-               "                const d = new Date(hoje);\n" +
-               "                d.setDate(d.getDate() - i);\n" +
-               "                const key = d.toLocaleDateString('pt-BR');\n" +
-               "                grupos[key] = 0;\n" +
-               "            }\n" +
-               "            devices.forEach(d => {\n" +
-               "                const dt = new Date(d.dataRegistro).toLocaleDateString('pt-BR');\n" +
-               "                if (grupos[dt] !== undefined) grupos[dt]++;\n" +
-               "            });\n" +
-               "            const labels = Object.keys(grupos);\n" +
-               "            const valores = Object.values(grupos);\n" +
-               "            timelineChartInstance = new Chart(ctx2, {\n" +
-               "                type: 'bar',\n" +
-               "                data: {\n" +
-               "                    labels,\n" +
-               "                    datasets: [{\n" +
-               "                        label: 'Registros',\n" +
-               "                        data: valores,\n" +
-               "                        backgroundColor: '#5856d6',\n" +
-               "                        borderRadius: 4\n" +
-               "                    }]\n" +
-               "                },\n" +
-               "                options: {\n" +
-               "                    responsive: true,\n" +
-               "                    plugins: { legend: { display: false } },\n" +
-               "                    scales: {\n" +
-               "                        x: { ticks: { color: '#8e8e93', font: { family: 'Outfit' } }, grid: { display: false } },\n" +
-               "                        y: { ticks: { color: '#8e8e93', font: { family: 'Outfit' } }, grid: { color: 'rgba(255,255,255,0.05)' } }\n" +
-               "                    }\n" +
-               "                }\n" +
-               "            });\n" +
-               "        }\n" +
-               "\n" +
-               "        // --- AÇÕES ---\n" +
-               "        function aprovar(hardwareId) {\n" +
-               "            const dias = prompt('Dias de licença (mínimo 30):', '30');\n" +
-               "            if (!dias) return;\n" +
-               "            fetch('/api/approve', {\n" +
-               "                method: 'POST',\n" +
-               "                headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },\n" +
-               "                body: JSON.stringify({ hardwareId, dias })\n" +
-               "            }).then(r => r.json()).then(d => {\n" +
-               "                if (d.success) { showToast('✅ Dispositivo aprovado!', 'success'); carregarDados(); }\n" +
-               "                else showToast('Erro ao aprovar', 'error');\n" +
-               "            }).catch(() => showToast('Erro de conexão', 'error'));\n" +
-               "        }\n" +
-               "\n" +
-               "        function bloquear(hardwareId) {\n" +
-               "            if (!confirm('Bloquear este dispositivo?')) return;\n" +
-               "            fetch('/api/block', {\n" +
-               "                method: 'POST',\n" +
-               "                headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },\n" +
-               "                body: JSON.stringify({ hardwareId })\n" +
-               "            }).then(r => r.json()).then(d => {\n" +
-               "                if (d.success) { showToast('⛔ Dispositivo bloqueado!', 'warning'); carregarDados(); }\n" +
-               "                else showToast('Erro ao bloquear', 'error');\n" +
-               "            }).catch(() => showToast('Erro de conexão', 'error'));\n" +
-               "        }\n" +
-               "\n" +
-               "        function excluir(hardwareId) {\n" +
-               "            if (!confirm('Excluir permanentemente este dispositivo?')) return;\n" +
-               "            fetch('/api/delete', {\n" +
-               "                method: 'POST',\n" +
-               "                headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },\n" +
-               "                body: JSON.stringify({ hardwareId })\n" +
-               "            }).then(r => r.json()).then(d => {\n" +
-               "                if (d.success) { showToast('🗑 Dispositivo excluído!', 'info'); carregarDados(); }\n" +
-               "                else showToast('Erro ao excluir', 'error');\n" +
-               "            }).catch(() => showToast('Erro de conexão', 'error'));\n" +
-               "        }\n" +
-               "\n" +
-               "        function enviarConfig(hardwareId) {\n" +
-               "            if (!confirm('Enviar configurações pendentes para este dispositivo?')) return;\n" +
-               "            fetch('/api/send-config', {\n" +
-               "                method: 'POST',\n" +
-               "                headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },\n" +
-               "                body: JSON.stringify({ hardwareId })\n" +
-               "            }).then(r => r.json()).then(d => {\n" +
-               "                if (d.success) { showToast('📤 Configurações enviadas!', 'success'); carregarDados(); }\n" +
-               "                else showToast('Erro ao enviar', 'error');\n" +
-               "            }).catch(() => showToast('Erro de conexão', 'error'));\n" +
-               "        }\n" +
-               "\n" +
-               "        function abrirEdicao(hardwareId) {\n" +
-               "            const device = devices.find(d => d.hardwareId === hardwareId);\n" +
-               "            if (!device) return;\n" +
-               "            document.body.insertAdjacentHTML('beforeend', `\n" +
-               "                <div class=\"modal-overlay\" id=\"edit-modal\">\n" +
-               "                    <div class=\"modal-card\">\n" +
-               "                        <h3>✎ Editar: <code style=\"color:var(--primary);font-size:16px\">${hardwareId}</code></h3>\n" +
-               "                        <p style=\"color:var(--text-muted);margin:5px 0 20px;font-size:14px\">Configure os dados e clique em Salvar</p>\n" +
-               "                        <div class=\"form-group\">\n" +
-               "                            <label>Nome do Cliente</label>\n" +
-               "                            <input id=\"edit-nome\" value=\"${device.nomeCliente || ''}\" placeholder=\"Ex: Estacionamento Centro\" />\n" +
-               "                        </div>\n" +
-               "                        <div class=\"form-grid-3\">\n" +
-               "                            <div class=\"form-group\">\n" +
-               "                                <label>Tarifa/Hora (R$)</label>\n" +
-               "                                <input id=\"edit-tarifa\" type=\"number\" step=\"0.5\" min=\"0\" value=\"${device.tarifaHora}\" />\n" +
-               "                            </div>\n" +
-               "                            <div class=\"form-group\">\n" +
-               "                                <label>Vagas Carro</label>\n" +
-               "                                <input id=\"edit-vagas-carro\" type=\"number\" min=\"0\" value=\"${device.vagasCarro}\" />\n" +
-               "                            </div>\n" +
-               "                            <div class=\"form-group\">\n" +
-               "                                <label>Vagas Moto</label>\n" +
-               "                                <input id=\"edit-vagas-moto\" type=\"number\" min=\"0\" value=\"${device.vagasMoto}\" />\n" +
-               "                            </div>\n" +
-               "                        </div>\n" +
-               "                        <div class=\"form-group\">\n" +
-               "                            <label>Dias de Licença (mín. 30)</label>\n" +
-               "                            <input id=\"edit-dias\" type=\"number\" min=\"30\" value=\"${device.diasLicencaPendente > 0 ? device.diasLicencaPendente : 30}\" />\n" +
-               "                        </div>\n" +
-               "                        <div class=\"modal-actions\">\n" +
-               "                            <button class=\"btn-cancel\" onclick=\"document.getElementById('edit-modal').remove()\">Cancelar</button>\n" +
-               "                            <button class=\"btn-save\" onclick=\"salvarEdicao('${hardwareId}')\">💾 Salvar</button>\n" +
-               "                        </div>\n" +
-               "                    </div>\n" +
-               "                </div>\n" +
-               "            `);\n" +
-               "        }\n" +
-               "\n" +
-               "        function salvarEdicao(hardwareId) {\n" +
-               "            const nomeCliente = document.getElementById('edit-nome').value;\n" +
-               "            const tarifaHora = parseFloat(document.getElementById('edit-tarifa').value) || 0;\n" +
-               "            const vagasCarro = parseInt(document.getElementById('edit-vagas-carro').value) || 0;\n" +
-               "            const vagasMoto = parseInt(document.getElementById('edit-vagas-moto').value) || 0;\n" +
-               "            const diasLicenca = parseInt(document.getElementById('edit-dias').value) || 30;\n" +
-               "            fetch('/api/update-config', {\n" +
-               "                method: 'POST',\n" +
-               "                headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },\n" +
-               "                body: JSON.stringify({ hardwareId, nomeCliente, tarifaHora, vagasCarro, vagasMoto, diasLicenca })\n" +
-               "            }).then(r => r.json()).then(d => {\n" +
-               "                if (d.success) {\n" +
-               "                    showToast('💾 Configurações salvas como pendentes!', 'success');\n" +
-               "                    document.getElementById('edit-modal').remove();\n" +
-               "                    carregarDados();\n" +
-               "                } else showToast('Erro ao salvar', 'error');\n" +
-               "            }).catch(() => showToast('Erro de conexão', 'error'));\n" +
-               "        }\n" +
+    private static String obterHtmlDashboardPart1() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<!DOCTYPE html>\n");
+        sb.append("<html lang=\"pt-BR\">\n");
+        sb.append("<head>\n");
+        sb.append("    <meta charset=\"UTF-8\">\n");
+        sb.append("    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
+        sb.append("    <title>Park ' 31 - Console Admin SaaS</title>\n");
+        sb.append("    <link href=\"https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap\" rel=\"stylesheet\">\n");
+        sb.append("    <link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css\">\n");
+        sb.append("    <script src=\"https://cdn.jsdelivr.net/npm/chart.js\"></script>\n");
+        sb.append("    <style>\n");
+        sb.append("        :root {\n");
+        sb.append("            --primary: #6366f1;\n");
+        sb.append("            --primary-hover: #4f46e5;\n");
+        sb.append("            --primary-glow: rgba(99, 102, 241, 0.3);\n");
+        sb.append("            --success: #10b981;\n");
+        sb.append("            --success-glow: rgba(16, 185, 129, 0.2);\n");
+        sb.append("            --danger: #ef4444;\n");
+        sb.append("            --danger-glow: rgba(239, 68, 68, 0.2);\n");
+        sb.append("            --warning: #f59e0b;\n");
+        sb.append("            --warning-glow: rgba(245, 158, 11, 0.2);\n");
+        sb.append("            --background: #090d16;\n");
+        sb.append("            --card-bg: rgba(17, 24, 39, 0.7);\n");
+        sb.append("            --border: rgba(255, 255, 255, 0.08);\n");
+        sb.append("            --text: #f3f4f6;\n");
+        sb.append("            --text-muted: #9ca3af;\n");
+        sb.append("            --sidebar-width: 260px;\n");
+        sb.append("        }\n");
+        sb.append("        * {\n");
+        sb.append("            margin: 0; padding: 0; box-sizing: border-box; font-family: 'Outfit', sans-serif;\n");
+        sb.append("        }\n");
+        sb.append("        body {\n");
+        sb.append("            background-color: var(--background);\n");
+        sb.append("            background-image: \n");
+        sb.append("                radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),\n");
+        sb.append("                radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.15) 0%, transparent 40%);\n");
+        sb.append("            color: var(--text);\n");
+        sb.append("            min-height: 100vh;\n");
+        sb.append("            overflow-x: hidden;\n");
+        sb.append("        }\n");
+        sb.append("        /* Login Panel Styling */\n");
+        sb.append("        #login-panel {\n");
+        sb.append("            display: flex; align-items: center; justify-content: center;\n");
+        sb.append("            position: fixed; top: 0; left: 0; right: 0; bottom: 0;\n");
+        sb.append("            background: rgba(9, 13, 22, 0.95); z-index: 1000;\n");
+        sb.append("            backdrop-filter: blur(12px);\n");
+        sb.append("        }\n");
+        sb.append("        .login-card {\n");
+        sb.append("            background: var(--card-bg);\n");
+        sb.append("            border: 1px solid var(--border);\n");
+        sb.append("            border-radius: 24px;\n");
+        sb.append("            padding: 40px;\n");
+        sb.append("            width: 100%; max-width: 420px;\n");
+        sb.append("            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);\n");
+        sb.append("            text-align: center;\n");
+        sb.append("            animation: fadeInUp 0.6s ease;\n");
+        sb.append("        }\n");
+        sb.append("        .login-card i.logo-icon {\n");
+        sb.append("            font-size: 48px; color: var(--primary);\n");
+        sb.append("            margin-bottom: 16px; filter: drop-shadow(0 0 10px var(--primary-glow));\n");
+        sb.append("        }\n");
+        sb.append("        .login-card h2 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }\n");
+        sb.append("        .login-card p { color: var(--text-muted); font-size: 14px; margin-bottom: 30px; }\n");
+        sb.append("        .form-group {\n");
+        sb.append("            margin-bottom: 20px; text-align: left;\n");
+        sb.append("        }\n");
+        sb.append("        .form-group label {\n");
+        sb.append("            display: block; font-size: 13px; text-transform: uppercase;\n");
+        sb.append("            color: var(--text-muted); font-weight: 600; letter-spacing: 1px; margin-bottom: 8px;\n");
+        sb.append("        }\n");
+        sb.append("        .form-control {\n");
+        sb.append("            width: 100%; padding: 14px 16px;\n");
+        sb.append("            background: rgba(255, 255, 255, 0.04);\n");
+        sb.append("            border: 1px solid var(--border);\n");
+        sb.append("            border-radius: 12px; color: var(--text);\n");
+        sb.append("            font-size: 15px; transition: 0.3s;\n");
+        sb.append("        }\n");
+        sb.append("        .form-control:focus {\n");
+        sb.append("            outline: none; border-color: var(--primary);\n");
+        sb.append("            background: rgba(255, 255, 255, 0.08);\n");
+        sb.append("            box-shadow: 0 0 0 4px var(--primary-glow);\n");
+        sb.append("        }\n");
+        sb.append("        .btn {\n");
+        sb.append("            display: inline-flex; align-items: center; justify-content: center; gap: 8px;\n");
+        sb.append("            width: 100%; padding: 14px 20px; border-radius: 12px; font-size: 15px; font-weight: 600;\n");
+        sb.append("            cursor: pointer; transition: 0.2s; border: none;\n");
+        sb.append("        }\n");
+        sb.append("        .btn-primary {\n");
+        sb.append("            background: linear-gradient(135deg, var(--primary), #8b5cf6);\n");
+        sb.append("            color: white; box-shadow: 0 4px 15px var(--primary-glow);\n");
+        sb.append("        }\n");
+        sb.append("        .btn-primary:hover {\n");
+        sb.append("            transform: translateY(-2px);\n");
+        sb.append("            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);\n");
+        sb.append("        }\n");
+        sb.append("        .btn-secondary {\n");
+        sb.append("            background: rgba(255, 255, 255, 0.08); color: var(--text);\n");
+        sb.append("            border: 1px solid var(--border);\n");
+        sb.append("        }\n");
+        sb.append("        .btn-secondary:hover {\n");
+        sb.append("            background: rgba(255, 255, 255, 0.15);\n");
+        sb.append("        }\n");
+        sb.append("        /* Main layout styling */\n");
+        sb.append("        #app-layout {\n");
+        sb.append("            display: flex; min-height: 100vh; opacity: 0; transition: opacity 0.5s ease;\n");
+        sb.append("        }\n");
+        sb.append("        #app-layout.active { opacity: 1; }\n");
+        sb.append("        /* Sidebar */\n");
+        sb.append("        .sidebar {\n");
+        sb.append("            width: var(--sidebar-width); background: rgba(10, 15, 30, 0.8);\n");
+        sb.append("            backdrop-filter: blur(20px); border-right: 1px solid var(--border);\n");
+        sb.append("            padding: 30px 20px; display: flex; flex-direction: column;\n");
+        sb.append("            position: fixed; height: 100vh; left: 0; top: 0; z-index: 100;\n");
+        sb.append("        }\n");
+        sb.append("        .brand {\n");
+        sb.append("            display: flex; align-items: center; gap: 12px; margin-bottom: 40px; padding: 0 10px;\n");
+        sb.append("        }\n");
+        sb.append("        .brand i { font-size: 28px; color: var(--primary); filter: drop-shadow(0 0 8px var(--primary-glow)); }\n");
+        sb.append("        .brand h1 { font-size: 22px; font-weight: 800; tracking-spacing: -0.5px; }\n");
+        sb.append("        .brand h1 span { color: var(--primary); }\n");
+        sb.append("        .menu-list {\n");
+        sb.append("            list-style: none; display: flex; flex-direction: column; gap: 8px; flex-grow: 1;\n");
+        sb.append("        }\n");
+        sb.append("        .menu-item {\n");
+        sb.append("            display: flex; align-items: center; gap: 12px; padding: 12px 16px;\n");
+        sb.append("            border-radius: 12px; color: var(--text-muted); text-decoration: none;\n");
+        sb.append("            font-weight: 500; font-size: 15px; cursor: pointer; transition: 0.2s;\n");
+        sb.append("        }\n");
+        sb.append("        .menu-item:hover, .menu-item.active {\n");
+        sb.append("            color: var(--text); background: rgba(255, 255, 255, 0.06);\n");
+        sb.append("        }\n");
+        sb.append("        .menu-item.active {\n");
+        sb.append("            background: rgba(99, 102, 241, 0.15); border-left: 3px solid var(--primary);\n");
+        sb.append("            color: white;\n");
+        sb.append("        }\n");
+        sb.append("        .sidebar-footer {\n");
+        sb.append("            padding: 20px 10px 0; border-top: 1px solid var(--border);\n");
+        sb.append("        }\n");
+        sb.append("        /* Main Content Panel */\n");
+        sb.append("        .main-content {\n");
+        sb.append("            margin-left: var(--sidebar-width); flex-grow: 1; padding: 40px;\n");
+        sb.append("            min-height: 100vh; display: flex; flex-direction: column; gap: 30px;\n");
+        sb.append("        }\n");
+        sb.append("        .header {\n");
+        sb.append("            display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;\n");
+        sb.append("        }\n");
+        sb.append("        .header h2 { font-size: 26px; font-weight: 700; }\n");
+        sb.append("        .header p { color: var(--text-muted); font-size: 14px; margin-top: 4px; }\n");
+        sb.append("        /* Glassmorphic Card Container */\n");
+        sb.append("        .card {\n");
+        sb.append("            background: var(--card-bg); border: 1px solid var(--border);\n");
+        sb.append("            border-radius: 20px; padding: 24px; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2);\n");
+        sb.append("            backdrop-filter: blur(16px);\n");
+        sb.append("        }\n");
+        sb.append("        /* Metrics Layout */\n");
+        sb.append("        .metrics-grid {\n");
+        sb.append("            display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px;\n");
+        sb.append("        }\n");
+        sb.append("        .metric-card {\n");
+        sb.append("            display: flex; align-items: center; gap: 20px;\n");
+        sb.append("        }\n");
+        sb.append("        .metric-icon {\n");
+        sb.append("            width: 56px; height: 56px; border-radius: 16px;\n");
+        sb.append("            display: flex; align-items: center; justify-content: center;\n");
+        sb.append("            font-size: 22px; color: white;\n");
+        sb.append("        }\n");
+        sb.append("        .metric-info h4 {\n");
+        sb.append("            font-size: 13px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; font-weight: 600;\n");
+        sb.append("        }\n");
+        sb.append("        .metric-info h3 {\n");
+        sb.append("            font-size: 24px; font-weight: 700; margin-top: 4px;\n");
+        sb.append("        }\n");
+        sb.append("        /* Interactive Tables */\n");
+        sb.append("        .table-responsive {\n");
+        sb.append("            overflow-x: auto; margin-top: 15px;\n");
+        sb.append("        }\n");
+        sb.append("        table {\n");
+        sb.append("            width: 100%; border-collapse: collapse; text-align: left;\n");
+        sb.append("        }\n");
+        sb.append("        th {\n");
+        sb.append("            padding: 16px; border-bottom: 1px solid var(--border);\n");
+        sb.append("            font-size: 13px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.5px;\n");
+        sb.append("        }\n");
+        sb.append("        td {\n");
+        sb.append("            padding: 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.03);\n");
+        sb.append("            font-size: 14px; color: var(--text); vertical-align: middle;\n");
+        sb.append("        }\n");
+        sb.append("        tr:last-child td { border-bottom: none; }\n");
+        sb.append("        tr:hover td { background: rgba(255, 255, 255, 0.01); }\n");
+        sb.append("        /* Badges */\n");
+        sb.append("        .badge {\n");
+        sb.append("            display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 8px;\n");
+        sb.append("            font-size: 12px; font-weight: 600; text-transform: uppercase; gap: 4px;\n");
+        sb.append("        }\n");
+        sb.append("        .badge-success {\n");
+        sb.append("            background: rgba(16, 185, 129, 0.15); color: var(--success);\n");
+        sb.append("            border: 1px solid rgba(16, 185, 129, 0.3);\n");
+        sb.append("        }\n");
+        sb.append("        .badge-danger {\n");
+        sb.append("            background: rgba(239, 68, 68, 0.15); color: var(--danger);\n");
+        sb.append("            border: 1px solid rgba(239, 68, 68, 0.3);\n");
+        sb.append("        }\n");
+        sb.append("        .badge-warning {\n");
+        sb.append("            background: rgba(245, 158, 11, 0.15); color: var(--warning);\n");
+        sb.append("            border: 1px solid rgba(245, 158, 11, 0.3);\n");
+        sb.append("        }\n");
+        sb.append("        /* Layout tabs */\n");
+        sb.append("        .tab-panel {\n");
+        sb.append("            display: none;\n");
+        sb.append("            animation: fadeIn 0.4s ease;\n");
+        sb.append("        }\n");
+        sb.append("        .tab-panel.active {\n");
+        sb.append("            display: flex; flex-direction: column; gap: 30px;\n");
+        sb.append("        }\n");
+        sb.append("        /* Charts layout */\n");
+        sb.append("        .charts-row {\n");
+        sb.append("            display: grid; grid-template-columns: 2fr 1fr; gap: 24px;\n");
+        sb.append("        }\n");
+        sb.append("@media (max-width: 1024px) {\n");
+        sb.append("    .charts-row { grid-template-columns: 1fr; }\n");
+        sb.append("}\n");
+        sb.append("        .chart-container {\n");
+        sb.append("            position: relative; width: 100%; height: 320px;\n");
+        sb.append("        }\n");
+        sb.append("        /* Filters */\n");
+        sb.append("        .filter-row {\n");
+        sb.append("            display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 20px;\n");
+        sb.append("        }\n");
+        sb.append("        .filter-group {\n");
+        sb.append("            display: flex; align-items: center; gap: 12px;\n");
+        sb.append("        }\n");
+        sb.append("        .preset-buttons {\n");
+        sb.append("            display: flex; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border);\n");
+        sb.append("            border-radius: 12px; padding: 4px;\n");
+        sb.append("        }\n");
+        sb.append("        .preset-btn {\n");
+        sb.append("            padding: 8px 16px; border: none; background: transparent; color: var(--text-muted);\n");
+        sb.append("            font-weight: 500; font-size: 14px; border-radius: 8px; cursor: pointer; transition: 0.2s;\n");
+        sb.append("        }\n");
+        sb.append("        .preset-btn.active, .preset-btn:hover {\n");
+        sb.append("            color: white; background: rgba(255, 255, 255, 0.08);\n");
+        sb.append("        }\n");
+        sb.append("        .date-picker-group {\n");
+        sb.append("            display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.03);\n");
+        sb.append("            border: 1px solid var(--border); padding: 6px 12px; border-radius: 12px;\n");
+        sb.append("        }\n");
+        sb.append("        .date-picker-group input {\n");
+        sb.append("            background: transparent; border: none; color: white; font-size: 14px; outline: none;\n");
+        sb.append("        }\n");
+        sb.append("        /* Modals style */\n");
+        sb.append("        .modal-overlay {\n");
+        sb.append("            position: fixed; top: 0; left: 0; right: 0; bottom: 0;\n");
+        sb.append("            background: rgba(0, 0, 0, 0.7); z-index: 1100;\n");
+        sb.append("            display: none; align-items: center; justify-content: center;\n");
+        sb.append("            backdrop-filter: blur(8px);\n");
+        sb.append("        }\n");
+        sb.append("        .modal-card {\n");
+        sb.append("            background: #0d121f;\n");
+        sb.append("            border: 1px solid var(--border);\n");
+        sb.append("            border-radius: 20px; padding: 30px; width: 100%; max-width: 480px;\n");
+        sb.append("            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);\n");
+        sb.append("            animation: fadeInUp 0.4s ease;\n");
+        sb.append("        }\n");
+        sb.append("        .modal-header {\n");
+        sb.append("            display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;\n");
+        sb.append("        }\n");
+        sb.append("        .modal-header h3 { font-size: 20px; font-weight: 700; }\n");
+        sb.append("        .modal-header i { font-size: 20px; color: var(--text-muted); cursor: pointer; transition: 0.2s; }\n");
+        sb.append("        .modal-header i:hover { color: white; }\n");
+        sb.append("        .modal-footer {\n");
+        sb.append("            display: flex; gap: 12px; justify-content: flex-end; margin-top: 30px;\n");
+        sb.append("        }\n");
+        sb.append("        .modal-footer .btn {\n");
+        sb.append("            width: auto; padding: 12px 24px;\n");
+        sb.append("        }\n");
+        sb.append("        /* Search bar */\n");
+        sb.append("        .search-bar-container {\n");
+        sb.append("            position: relative; width: 100%; max-width: 320px;\n");
+        sb.append("        }\n");
+        sb.append("        .search-bar-container i {\n");
+        sb.append("            position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--text-muted);\n");
+        sb.append("        }\n");
+        sb.append("        .search-bar-container input {\n");
+        sb.append("            width: 100%; padding: 12px 16px 12px 48px; border-radius: 12px;\n");
+        sb.append("            background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border);\n");
+        sb.append("            color: white; font-size: 14px; outline: none; transition: 0.2s;\n");
+        sb.append("        }\n");
+        sb.append("        .search-bar-container input:focus { border-color: var(--primary); background: rgba(255, 255, 255, 0.08); }\n");
+        sb.append("        /* Logs styling */\n");
+        sb.append("        .logs-box {\n");
+        sb.append("            background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border); border-radius: 12px;\n");
+        sb.append("            padding: 16px; height: 400px; overflow-y: auto; font-family: monospace; font-size: 13px;\n");
+        sb.append("            color: #10b981; line-height: 1.6; display: flex; flex-direction: column-reverse; gap: 4px;\n");
+        sb.append("        }\n");
+        sb.append("        /* Toast notifications */\n");
+        sb.append("        .toast {\n");
+        sb.append("            position: fixed; bottom: 30px; right: 30px; padding: 16px 24px; border-radius: 12px;\n");
+        sb.append("            background: rgba(17, 24, 39, 0.9); border: 1px solid var(--border); color: white;\n");
+        sb.append("            display: flex; align-items: center; gap: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);\n");
+        sb.append("            z-index: 10000; animation: slideInRight 0.3s ease; font-weight: 500;\n");
+        sb.append("        }\n");
+        sb.append("        .toast.success { border-left: 4px solid var(--success); }\n");
+        sb.append("        .toast.error { border-left: 4px solid var(--danger); }\n");
+        sb.append("        /* Keyframes */\n");
+        sb.append("        @keyframes fadeInUp {\n");
+        sb.append("            from { opacity: 0; transform: translateY(20px); }\n");
+        sb.append("            to { opacity: 1; transform: translateY(0); }\n");
+        sb.append("        }\n");
+        sb.append("        @keyframes fadeIn {\n");
+        sb.append("            from { opacity: 0; }\n");
+        sb.append("            to { opacity: 1; }\n");
+        sb.append("        }\n");
+        sb.append("        @keyframes slideInRight {\n");
+        sb.append("            from { transform: translateX(100%); opacity: 0; }\n");
+        sb.append("            to { transform: translateX(0); opacity: 1; }\n");
+        sb.append("        }\n");
+        sb.append("    </style>\n");
+        sb.append("</head>\n");
+        return sb.toString();
+    }
 
-               "        // Auto refresh a cada 15 segundos\n" +
-               "        if (adminToken) {\n" +
-               "            setInterval(carregarDados, 15000);\n" +
-               "        }\n" +
-               "\n" +
-               "        // Inicializar dados\n" +
-               "        if (adminToken) carregarDados();\n" +
-               "    </script>\n" +
-               "</body>\n" +
-               "</html>";
+    private static String obterHtmlDashboardPart2() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<body>\n");
+        sb.append("    <!-- Login Modal -->\n");
+        sb.append("    <div id=\"login-panel\">\n");
+        sb.append("        <div class=\"login-card\">\n");
+        sb.append("            <i class=\"fa-solid fa-square-parking logo-icon\"></i>\n");
+        sb.append("            <h2>Console Park ' 31</h2>\n");
+        sb.append("            <p>Insira a senha do administrador para acessar o painel central SaaS</p>\n");
+        sb.append("            <div class=\"form-group\">\n");
+        sb.append("                <label for=\"senha-input\">Senha Admin</label>\n");
+        sb.append("                <input type=\"password\" id=\"senha-input\" class=\"form-control\" placeholder=\"••••••••\" onkeydown=\"if(event.key === 'Enter') realizarLogin()\">\n");
+        sb.append("            </div>\n");
+        sb.append("            <button class=\"btn btn-primary\" onclick=\"realizarLogin()\">\n");
+        sb.append("                <i class=\"fa-solid fa-right-to-bracket\"></i> Acessar Painel\n");
+        sb.append("            </button>\n");
+        sb.append("        </div>\n");
+        sb.append("    </div>\n");
+        sb.append("\n");
+        sb.append("    <!-- Main Dashboard Layout -->\n");
+        sb.append("    <div id=\"app-layout\">\n");
+        sb.append("        <!-- Sidebar -->\n");
+        sb.append("        <div class=\"sidebar\">\n");
+        sb.append("            <div class=\"brand\">\n");
+        sb.append("                <i class=\"fa-solid fa-square-parking\"></i>\n");
+        sb.append("                <h1>Park '<span>31</span></h1>\n");
+        sb.append("            </div>\n");
+        sb.append("            <ul class=\"menu-list\">\n");
+        sb.append("                <li><div class=\"menu-item active\" onclick=\"mudarAba('tab-faturamento')\" id=\"btn-tab-faturamento\"><i class=\"fa-solid fa-chart-line\"></i> Faturamento & Caixa</div></li>\n");
+        sb.append("                <li><div class=\"menu-item\" onclick=\"mudarAba('tab-mensalistas')\" id=\"btn-tab-mensalistas\"><i class=\"fa-solid fa-users-line\"></i> Gestão de Mensalistas</div></li>\n");
+        sb.append("                <li><div class=\"menu-item\" onclick=\"mudarAba('tab-terminais')\" id=\"btn-tab-terminais\"><i class=\"fa-solid fa-tablet-screen-button\"></i> Terminais & Pátios</div></li>\n");
+        sb.append("                <li><div class=\"menu-item\" onclick=\"mudarAba('tab-auditoria')\" id=\"btn-tab-auditoria\"><i class=\"fa-solid fa-shield-halved\"></i> Logs de Auditoria</div></li>\n");
+        sb.append("            </ul>\n");
+        sb.append("            <div class=\"sidebar-footer\">\n");
+        sb.append("                <button class=\"btn btn-secondary\" style=\"padding: 10px; font-size: 13px;\" onclick=\"efetuarLogout()\">\n");
+        sb.append("                    <i class=\"fa-solid fa-right-from-bracket\"></i> Sair da Console\n");
+        sb.append("                </button>\n");
+        sb.append("            </div>\n");
+        sb.append("        </div>\n");
+        sb.append("\n");
+        sb.append("        <!-- Main Content -->\n");
+        sb.append("        <div class=\"main-content\">\n");
+        sb.append("            <!-- TAB: FATURAMENTO & CAIXA -->\n");
+        sb.append("            <div id=\"tab-faturamento\" class=\"tab-panel active\">\n");
+        sb.append("                <div class=\"header\">\n");
+        sb.append("                    <div>\n");
+        sb.append("                        <h2>Faturamento & Caixa Consolidado</h2>\n");
+        sb.append("                        <p>Receitas unificadas de todos os pátios e terminais móveis associados</p>\n");
+        sb.append("                    </div>\n");
+        sb.append("                </div>\n");
+        sb.append("\n");
+        sb.append("                <!-- Metric cards -->\n");
+        sb.append("                <div class=\"metrics-grid\">\n");
+        sb.append("                    <div class=\"card metric-card\">\n");
+        sb.append("                        <div class=\"metric-icon\" style=\"background: linear-gradient(135deg, #10b981, #059669);\"><i class=\"fa-solid fa-dollar-sign\"></i></div>\n");
+        sb.append("                        <div class=\"metric-info\">\n");
+        sb.append("                            <h4>Faturamento Total</h4>\n");
+        sb.append("                            <h3 id=\"total-faturamento\">R$ 0,00</h3>\n");
+        sb.append("                        </div>\n");
+        sb.append("                    </div>\n");
+        sb.append("                    <div class=\"card metric-card\">\n");
+        sb.append("                        <div class=\"metric-icon\" style=\"background: linear-gradient(135deg, #6366f1, #4f46e5);\"><i class=\"fa-solid fa-clock\"></i></div>\n");
+        sb.append("                        <div class=\"metric-info\">\n");
+        sb.append("                            <h4>Permanência Média</h4>\n");
+        sb.append("                            <h3 id=\"media-permanencia\">0 min</h3>\n");
+        sb.append("                        </div>\n");
+        sb.append("                    </div>\n");
+        sb.append("                    <div class=\"card metric-card\">\n");
+        sb.append("                        <div class=\"metric-icon\" style=\"background: linear-gradient(135deg, #f59e0b, #d97706);\"><i class=\"fa-solid fa-ticket\"></i></div>\n");
+        sb.append("                        <div class=\"metric-info\">\n");
+        sb.append("                            <h4>Ticket Médio</h4>\n");
+        sb.append("                            <h3 id=\"ticket-medio\">R$ 0,00</h3>\n");
+        sb.append("                        </div>\n");
+        sb.append("                    </div>\n");
+        sb.append("                    <div class=\"card metric-card\">\n");
+        sb.append("                        <div class=\"metric-icon\" style=\"background: linear-gradient(135deg, #ec4899, #db2777);\"><i class=\"fa-solid fa-mobile-screen-button\"></i></div>\n");
+        sb.append("                        <div class=\"metric-info\">\n");
+        sb.append("                            <h4>Terminais Ativos</h4>\n");
+        sb.append("                            <h3 id=\"count-terminais\">0</h3>\n");
+        sb.append("                        </div>\n");
+        sb.append("                    </div>\n");
+        sb.append("                </div>\n");
+        sb.append("\n");
+        sb.append("                <!-- Filter Panel -->\n");
+        sb.append("                <div class=\"card filter-row\">\n");
+        sb.append("                    <div class=\"filter-group\">\n");
+        sb.append("                        <span style=\"font-size: 14px; font-weight: 600; color: var(--text-muted);\"><i class=\"fa-solid fa-calendar-days\"></i> Período:</span>\n");
+        sb.append("                        <div class=\"preset-buttons\">\n");
+        sb.append("                            <button class=\"preset-btn active\" onclick=\"setPresetPeriod(7, this)\">7 Dias</button>\n");
+        sb.append("                            <button class=\"preset-btn\" onclick=\"setPresetPeriod(30, this)\">30 Dias</button>\n");
+        sb.append("                            <button class=\"preset-btn\" onclick=\"setPresetPeriod(0, this)\">Ver Tudo</button>\n");
+        sb.append("                        </div>\n");
+        sb.append("                    </div>\n");
+        sb.append("                    <div class=\"filter-group\">\n");
+        sb.append("                        <div class=\"date-picker-group\">\n");
+        sb.append("                            <input type=\"date\" id=\"filtro-data-inicio\" onchange=\"aplicarFiltrosData()\">\n");
+        sb.append("                            <span style=\"color: var(--text-muted); font-size: 12px;\">até</span>\n");
+        sb.append("                            <input type=\"date\" id=\"filtro-data-fim\" onchange=\"aplicarFiltrosData()\">\n");
+        sb.append("                        </div>\n");
+        sb.append("                    </div>\n");
+        sb.append("                </div>\n");
+        sb.append("\n");
+        sb.append("                <!-- Charts Row -->\n");
+        sb.append("                <div class=\"charts-row\">\n");
+        sb.append("                    <div class=\"card\">\n");
+        sb.append("                        <h3 style=\"font-size: 16px; font-weight: 600; margin-bottom: 20px;\"><i class=\"fa-solid fa-chart-area\"></i> Receita Diária Consolidada</h3>\n");
+        sb.append("                        <div class=\"chart-container\">\n");
+        sb.append("                            <canvas id=\"chart-receita-diaria\"></canvas>\n");
+        sb.append("                        </div>\n");
+        sb.append("                    </div>\n");
+        sb.append("                    <div class=\"card\">\n");
+        sb.append("                        <h3 style=\"font-size: 16px; font-weight: 600; margin-bottom: 20px;\"><i class=\"fa-solid fa-chart-pie\"></i> Receita por Terminal</h3>\n");
+        sb.append("                        <div class=\"chart-container\">\n");
+        sb.append("                            <canvas id=\"chart-receita-terminal\"></canvas>\n");
+        sb.append("                        </div>\n");
+        sb.append("                    </div>\n");
+        sb.append("                </div>\n");
+        sb.append("\n");
+        sb.append("                <!-- Transactions List -->\n");
+        sb.append("                <div class=\"card\">\n");
+        sb.append("                    <div class=\"header\" style=\"margin-bottom: 20px;\">\n");
+        sb.append("                        <h3>Transações Recentes</h3>\n");
+        sb.append("                        <div class=\"search-bar-container\">\n");
+        sb.append("                            <i class=\"fa-solid fa-magnifying-glass\"></i>\n");
+        sb.append("                            <input type=\"text\" placeholder=\"Buscar placa...\" id=\"busca-transacao\" oninput=\"filtrarTabelaTransacoes()\">\n");
+        sb.append("                        </div>\n");
+        sb.append("                    </div>\n");
+        sb.append("                    <div class=\"table-responsive\">\n");
+        sb.append("                        <table id=\"tabela-transacoes\">\n");
+        sb.append("                            <thead>\n");
+        sb.append("                                <tr>\n");
+        sb.append("                                    <th>Placa</th>\n");
+        sb.append("                                    <th>Horário Entrada</th>\n");
+        sb.append("                                    <th>Horário Saída</th>\n");
+        sb.append("                                    <th>Permanência</th>\n");
+        sb.append("                                    <th>Valor Pago</th>\n");
+        sb.append("                                    <th>Terminal</th>\n");
+        sb.append("                                </tr>\n");
+        sb.append("                            </thead>\n");
+        sb.append("                            <tbody>\n");
+        sb.append("                                <!-- Inserido via JS -->\n");
+        sb.append("                            </tbody>\n");
+        sb.append("                        </table>\n");
+        sb.append("                    </div>\n");
+        sb.append("                </div>\n");
+        sb.append("            </div>\n");
+        sb.append("\n");
+        sb.append("            <!-- TAB: GESTAO DE MENSALISTAS -->\n");
+        sb.append("            <div id=\"tab-mensalistas\" class=\"tab-panel\">\n");
+        sb.append("                <div class=\"header\">\n");
+        sb.append("                    <div>\n");
+        sb.append("                        <h2>Gestão de Mensalistas</h2>\n");
+        sb.append("                        <p>Controle de assinantes recorrentes com sincronização offline com os pátios</p>\n");
+        sb.append("                    </div>\n");
+        sb.append("                    <button class=\"btn btn-primary\" style=\"width: auto;\" onclick=\"abrirModalNovoMensalista()\">\n");
+        sb.append("                        <i class=\"fa-solid fa-user-plus\"></i> Novo Mensalista\n");
+        sb.append("                    </button>\n");
+        sb.append("                </div>\n");
+        sb.append("\n");
+        sb.append("                <div class=\"card\">\n");
+        sb.append("                    <div class=\"header\" style=\"margin-bottom: 20px;\">\n");
+        sb.append("                        <h3>Assinantes Cadastrados</h3>\n");
+        sb.append("                        <div class=\"search-bar-container\">\n");
+        sb.append("                            <i class=\"fa-solid fa-magnifying-glass\"></i>\n");
+        sb.append("                            <input type=\"text\" placeholder=\"Buscar por nome ou placa...\" id=\"busca-mensalista\" oninput=\"filtrarTabelaMensalistas()\">\n");
+        sb.append("                        </div>\n");
+        sb.append("                    </div>\n");
+        sb.append("                    <div class=\"table-responsive\">\n");
+        sb.append("                        <table id=\"tabela-mensalistas\">\n");
+        sb.append("                            <thead>\n");
+        sb.append("                                <tr>\n");
+        sb.append("                                    <th>Nome do Cliente</th>\n");
+        sb.append("                                    <th>Placa do Veículo</th>\n");
+        sb.append("                                    <th>Telefone</th>\n");
+        sb.append("                                    <th>Vencimento</th>\n");
+        sb.append("                                    <th>Status</th>\n");
+        sb.append("                                    <th style=\"text-align: right;\">Ações</th>\n");
+        sb.append("                                </tr>\n");
+        sb.append("                            </thead>\n");
+        sb.append("                            <tbody>\n");
+        sb.append("                                <!-- Inserido via JS -->\n");
+        sb.append("                            </tbody>\n");
+        sb.append("                        </table>\n");
+        sb.append("                    </div>\n");
+        sb.append("                </div>\n");
+        sb.append("            </div>\n");
+        sb.append("\n");
+        sb.append("            <!-- TAB: TERMINAIS -->\n");
+        sb.append("            <div id=\"tab-terminais\" class=\"tab-panel\">\n");
+        sb.append("                <div class=\"header\">\n");
+        sb.append("                    <div>\n");
+        sb.append("                        <h2>Terminais & Pátios de Estacionamento</h2>\n");
+        sb.append("                        <p>Autorize novos aparelhos Android/Swing e controle limites de vagas centralizados</p>\n");
+        sb.append("                    </div>\n");
+        sb.append("                </div>\n");
+        sb.append("\n");
+        sb.append("                <div class=\"card\">\n");
+        sb.append("                    <h3>Terminais Identificados</h3>\n");
+        sb.append("                    <div class=\"table-responsive\">\n");
+        sb.append("                        <table id=\"tabela-terminais\">\n");
+        sb.append("                            <thead>\n");
+        sb.append("                                <tr>\n");
+        sb.append("                                    <th>Aparelho / OS</th>\n");
+        sb.append("                                    <th>Hardware ID</th>\n");
+        sb.append("                                    <th>Pátio / Cliente</th>\n");
+        sb.append("                                    <th>Tarifa</th>\n");
+        sb.append("                                    <th>Vagas (C/M)</th>\n");
+        sb.append("                                    <th>Expiração Licença</th>\n");
+        sb.append("                                    <th>Status</th>\n");
+        sb.append("                                    <th style=\"text-align: right;\">Ações</th>\n");
+        sb.append("                                </tr>\n");
+        sb.append("                            </thead>\n");
+        sb.append("                            <tbody>\n");
+        sb.append("                                <!-- Inserido via JS -->\n");
+        sb.append("                            </tbody>\n");
+        sb.append("                        </table>\n");
+        sb.append("                    </div>\n");
+        sb.append("                </div>\n");
+        sb.append("            </div>\n");
+        sb.append("\n");
+        sb.append("            <!-- TAB: AUDITORIA -->\n");
+        sb.append("            <div id=\"tab-auditoria\" class=\"tab-panel\">\n");
+        sb.append("                <div class=\"header\">\n");
+        sb.append("                    <div>\n");
+        sb.append("                        <h2>Logs de Auditoria de Segurança</h2>\n");
+        sb.append("                        <p>Registro imutável em tempo real de todas as ações sensíveis realizadas nos terminais</p>\n");
+        sb.append("                    </div>\n");
+        sb.append("                    <div style=\"display: flex; align-items: center; gap: 10px;\">\n");
+        sb.append("                        <input type=\"checkbox\" id=\"check-autorefresh\" checked style=\"width: 18px; height: 18px; cursor: pointer;\">\n");
+        sb.append("                        <label for=\"check-autorefresh\" style=\"font-size: 14px; font-weight: 500; cursor: pointer;\">Atualização Automática</label>\n");
+        sb.append("                    </div>\n");
+        sb.append("                </div>\n");
+        sb.append("\n");
+        sb.append("                <div class=\"card\">\n");
+        sb.append("                    <div class=\"logs-box\" id=\"box-logs\">\n");
+        sb.append("                        <!-- Inserido via JS -->\n");
+        sb.append("                    </div>\n");
+        sb.append("                </div>\n");
+        sb.append("            </div>\n");
+        sb.append("        </div>\n");
+        sb.append("    </div>\n");
+        sb.append("\n");
+        sb.append("    <!-- MODALS SECTION -->\n");
+        sb.append("    <!-- Modal: Adicionar Mensalista -->\n");
+        sb.append("    <div class=\"modal-overlay\" id=\"modal-novo-mensalista\">\n");
+        sb.append("        <div class=\"modal-card\">\n");
+        sb.append("            <div class=\"modal-header\">\n");
+        sb.append("                <h3>Novo Mensalista</h3>\n");
+        sb.append("                <i class=\"fa-solid fa-xmark\" onclick=\"fecharModais()\"></i>\n");
+        sb.append("            </div>\n");
+        sb.append("            <div class=\"form-group\">\n");
+        sb.append("                <label>Nome Completo</label>\n");
+        sb.append("                <input type=\"text\" id=\"input-m-nome\" class=\"form-control\" placeholder=\"ex. João da Silva\">\n");
+        sb.append("            </div>\n");
+        sb.append("            <div class=\"form-group\">\n");
+        sb.append("                <label>Placa do Veículo</label>\n");
+        sb.append("                <input type=\"text\" id=\"input-m-placa\" class=\"form-control\" placeholder=\"ex. ABC1D23\" style=\"text-transform: uppercase;\">\n");
+        sb.append("            </div>\n");
+        sb.append("            <div class=\"form-group\">\n");
+        sb.append("                <label>Telefone para Contato</label>\n");
+        sb.append("                <input type=\"text\" id=\"input-m-telefone\" class=\"form-control\" placeholder=\"ex. (31) 98765-4321\">\n");
+        sb.append("            </div>\n");
+        sb.append("            <div class=\"form-group\">\n");
+        sb.append("                <label>Data de Vencimento</label>\n");
+        sb.append("                <input type=\"date\" id=\"input-m-vencimento\" class=\"form-control\">\n");
+        sb.append("            </div>\n");
+        sb.append("            <div class=\"modal-footer\">\n");
+        sb.append("                <button class=\"btn btn-secondary\" onclick=\"fecharModais()\">Cancelar</button>\n");
+        sb.append("                <button class=\"btn btn-primary\" onclick=\"salvarNovoMensalista()\">Salvar Mensalista</button>\n");
+        sb.append("            </div>\n");
+        sb.append("        </div>\n");
+        sb.append("    </div>\n");
+        sb.append("\n");
+        sb.append("    <!-- Modal: Renovar / Editar Mensalista -->\n");
+        sb.append("    <div class=\"modal-overlay\" id=\"modal-editar-mensalista\">\n");
+        sb.append("        <div class=\"modal-card\">\n");
+        sb.append("            <div class=\"modal-header\">\n");
+        sb.append("                <h3>Renovar Assinatura</h3>\n");
+        sb.append("                <i class=\"fa-solid fa-xmark\" onclick=\"fecharModais()\"></i>\n");
+        sb.append("            </div>\n");
+        sb.append("            <input type=\"hidden\" id=\"editar-m-placa\">\n");
+        sb.append("            <div class=\"form-group\">\n");
+        sb.append("                <label>Nome do Cliente</label>\n");
+        sb.append("                <input type=\"text\" id=\"editar-m-nome\" class=\"form-control\" readonly style=\"background: rgba(255,255,255,0.02); opacity: 0.7;\">\n");
+        sb.append("            </div>\n");
+        sb.append("            <div class=\"form-group\">\n");
+        sb.append("                <label>Nova Data de Vencimento</label>\n");
+        sb.append("                <input type=\"date\" id=\"editar-m-vencimento\" class=\"form-control\">\n");
+        sb.append("            </div>\n");
+        sb.append("            <div class=\"form-group\">\n");
+        sb.append("                <label>Status</label>\n");
+        sb.append("                <select id=\"editar-m-status\" class=\"form-control\">\n");
+        sb.append("                    <option value=\"ATIVO\">ATIVO</option>\n");
+        sb.append("                    <option value=\"SUSPENSO\">SUSPENSO</option>\n");
+        sb.append("                </select>\n");
+        sb.append("            </div>\n");
+        sb.append("            <div class=\"modal-footer\">\n");
+        sb.append("                <button class=\"btn btn-secondary\" onclick=\"fecharModais()\">Cancelar</button>\n");
+        sb.append("                <button class=\"btn btn-primary\" onclick=\"salvarEdicaoMensalista()\">Confirmar Renovação</button>\n");
+        sb.append("            </div>\n");
+        sb.append("        </div>\n");
+        sb.append("    </div>\n");
+        sb.append("\n");
+        sb.append("    <!-- Modal: Aprovar Licença de Terminal -->\n");
+        sb.append("    <div class=\"modal-overlay\" id=\"modal-aprovar-terminal\">\n");
+        sb.append("        <div class=\"modal-card\">\n");
+        sb.append("            <div class=\"modal-header\">\n");
+        sb.append("                <h3>Aprovar Dispositivo</h3>\n");
+        sb.append("                <i class=\"fa-solid fa-xmark\" onclick=\"fecharModais()\"></i>\n");
+        sb.append("            </div>\n");
+        sb.append("            <input type=\"hidden\" id=\"aprovar-t-hwid\">\n");
+        sb.append("            <div class=\"form-group\">\n");
+        sb.append("                <label>Dias de Licença Autorizados</label>\n");
+        sb.append("                <input type=\"number\" id=\"aprovar-t-dias\" class=\"form-control\" value=\"30\" min=\"1\">\n");
+        sb.append("            </div>\n");
+        sb.append("            <div class=\"modal-footer\">\n");
+        sb.append("                <button class=\"btn btn-secondary\" onclick=\"fecharModais()\">Cancelar</button>\n");
+        sb.append("                <button class=\"btn btn-primary\" onclick=\"salvarAprovacaoTerminal()\">Liberar Terminal</button>\n");
+        sb.append("            </div>\n");
+        sb.append("        </div>\n");
+        sb.append("    </div>\n");
+        sb.append("\n");
+        sb.append("    <!-- JAVASCRIPT AJAX & CORE LOGIC -->\n");
+        sb.append("    <script>\n");
+        sb.append("        let cachedToken = localStorage.getItem('park31_token');\n");
+        sb.append("        let transacoesOriginais = [];\n");
+        sb.append("        let mensalistasOriginais = [];\n");
+        sb.append("        let chartReceita = null;\n");
+        sb.append("        let chartTerminal = null;\n");
+        sb.append("\n");
+        sb.append("        // Inicialização\n");
+        sb.append("        window.addEventListener('load', () => {\n");
+        sb.append("            if (cachedToken) {\n");
+        sb.append("                document.getElementById('login-panel').style.display = 'none';\n");
+        sb.append("                document.getElementById('app-layout').classList.add('active');\n");
+        sb.append("                carregarTudo();\n");
+        sb.append("                iniciarAutoRefresh();\n");
+        sb.append("            } else {\n");
+        sb.append("                document.getElementById('login-panel').style.display = 'flex';\n");
+        sb.append("            }\n");
+        sb.append("            // Iniciar com datas padrão no filtro: últimos 30 dias\n");
+        sb.append("            const hoje = new Date();\n");
+        sb.append("            const trintaDiasAtras = new Date(hoje.getTime() - (30 * 24 * 60 * 60 * 1000));\n");
+        sb.append("            document.getElementById('filtro-data-inicio').value = trintaDiasAtras.toISOString().split('T')[0];\n");
+        sb.append("            document.getElementById('filtro-data-fim').value = hoje.toISOString().split('T')[0];\n");
+        sb.append("        });\n");
+        sb.append("\n");
+        sb.append("        function mostrarToast(mensagem, tipo = 'success') {\n");
+        sb.append("            const t = document.createElement('div');\n");
+        sb.append("            t.className = `toast ${tipo}`;\n");
+        sb.append("            t.innerHTML = `<i class=\"fa-solid ${tipo === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'}\"></i> <span>${mensagem}</span>`;\n");
+        sb.append("            document.body.appendChild(t);\n");
+        sb.append("            setTimeout(() => { t.remove(); }, 3000);\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function realizarLogin() {\n");
+        sb.append("            const senha = document.getElementById('senha-input').value;\n");
+        sb.append("            if (!senha) return;\n");
+        sb.append("            fetch('/api/login', {\n");
+        sb.append("                method: 'POST',\n");
+        sb.append("                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },\n");
+        sb.append("                body: 'senha=' + encodeURIComponent(senha)\n");
+        sb.append("            })\n");
+        sb.append("            .then(r => r.json())\n");
+        sb.append("            .then(data => {\n");
+        sb.append("                if (data.success) {\n");
+        sb.append("                    cachedToken = data.token;\n");
+        sb.append("                    localStorage.setItem('park31_token', cachedToken);\n");
+        sb.append("                    document.getElementById('login-panel').style.display = 'none';\n");
+        sb.append("                    document.getElementById('app-layout').classList.add('active');\n");
+        sb.append("                    carregarTudo();\n");
+        sb.append("                    iniciarAutoRefresh();\n");
+        sb.append("                    mostrarToast('Login efetuado com sucesso!');\n");
+        sb.append("                } else {\n");
+        sb.append("                    mostrarToast('Senha incorreta!', 'error');\n");
+        sb.append("                }\n");
+        sb.append("            })\n");
+        sb.append("            .catch(err => mostrarToast('Erro ao conectar ao servidor', 'error'));\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function efetuarLogout() {\n");
+        sb.append("            localStorage.removeItem('park31_token');\n");
+        sb.append("            cachedToken = null;\n");
+        sb.append("            document.getElementById('login-panel').style.display = 'flex';\n");
+        sb.append("            document.getElementById('app-layout').classList.remove('active');\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function carregarTudo() {\n");
+        sb.append("            carregarTransacoes();\n");
+        sb.append("            carregarMensalistas();\n");
+        sb.append("            carregarTerminais();\n");
+        sb.append("            carregarLogs();\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function iniciarAutoRefresh() {\n");
+        sb.append("            setInterval(() => {\n");
+        sb.append("                if (cachedToken && document.getElementById('check-autorefresh').checked) {\n");
+        sb.append("                    carregarLogs();\n");
+        sb.append("                }\n");
+        sb.append("            }, 4000);\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function mudarAba(tabId) {\n");
+        sb.append("            document.querySelectorAll('.tab-panel').forEach(t => t.classList.remove('active'));\n");
+        sb.append("            document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('active'));\n");
+        sb.append("            document.getElementById(tabId).classList.add('active');\n");
+        sb.append("            document.getElementById('btn-' + tabId).classList.add('active');\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function fecharModais() {\n");
+        sb.append("            document.querySelectorAll('.modal-overlay').forEach(m => m.style.display = 'none');\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        // --- GESTÃO DE MENSALISTAS ---\n");
+        sb.append("        function carregarMensalistas() {\n");
+        sb.append("            fetch('/api/mensalistas/list', {\n");
+        sb.append("                headers: { 'X-Admin-Token': cachedToken }\n");
+        sb.append("            })\n");
+        sb.append("            .then(r => {\n");
+        sb.append("                if (r.status === 401) { efetuarLogout(); return []; }\n");
+        sb.append("                return r.json();\n");
+        sb.append("            })\n");
+        sb.append("            .then(data => {\n");
+        sb.append("                mensalistasOriginais = data;\n");
+        sb.append("                renderizarTabelaMensalistas(data);\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function renderizarTabelaMensalistas(lista) {\n");
+        sb.append("            const tbody = document.querySelector('#tabela-mensalistas tbody');\n");
+        sb.append("            tbody.innerHTML = '';\n");
+        sb.append("            if (lista.length === 0) {\n");
+        sb.append("                tbody.innerHTML = '<tr><td colspan=\"6\" style=\"text-align: center; color: var(--text-muted); padding: 30px;\">Nenhum mensalista cadastrado</td></tr>';\n");
+        sb.append("                return;\n");
+        sb.append("            }\n");
+        sb.append("            const hoje = Date.now();\n");
+        sb.append("            lista.forEach(m => {\n");
+        sb.append("                const dataVenc = new Date(m.vencimento);\n");
+        sb.append("                const formatada = dataVenc.toLocaleDateString('pt-BR');\n");
+        sb.append("                let status = m.status ? m.status.toUpperCase() : 'ATIVO';\n");
+        sb.append("                if (status === 'ATIVO' && m.vencimento < hoje) {\n");
+        sb.append("                    status = 'VENCIDO';\n");
+        sb.append("                }\n");
+        sb.append("                let badgeClass = 'badge-success';\n");
+        sb.append("                if (status === 'VENCIDO') badgeClass = 'badge-danger';\n");
+        sb.append("                if (status === 'SUSPENSO') badgeClass = 'badge-warning';\n");
+        sb.append("                \n");
+        sb.append("                const row = document.createElement('tr');\n");
+        sb.append("                row.innerHTML = `\n");
+        sb.append("                    <td style=\"font-weight: 600;\">${m.nomeCliente}</td>\n");
+        sb.append("                    <td><span class=\"badge btn-secondary\" style=\"font-family: monospace; font-size: 13px;\">${m.placa}</span></td>\n");
+        sb.append("                    <td>${m.telefone || '-'}</td>\n");
+        sb.append("                    <td>${formatada}</td>\n");
+        sb.append("                    <td><span class=\"badge ${badgeClass}\"><i class=\"fa-solid ${status === 'ATIVO' ? 'fa-check' : 'fa-triangle-exclamation'}\"></i> ${status}</span></td>\n");
+        sb.append("                    <td style=\"text-align: right; display: flex; gap: 8px; justify-content: flex-end;\">\n");
+        sb.append("                        <button class=\"btn btn-secondary\" style=\"padding: 8px 12px; font-size: 12px;\" onclick=\"abrirModalEditarMensalista('${m.placa}', '${m.nomeCliente}', ${m.vencimento}, '${m.status}')\"><i class=\"fa-solid fa-calendar-plus\"></i> Renovar</button>\n");
+        sb.append("                        <button class=\"btn ${m.status === 'ATIVO' ? 'btn-secondary' : 'btn-primary'}\" style=\"padding: 8px 12px; font-size: 12px;\" onclick=\"toggleStatusMensalista('${m.placa}', '${m.status}', ${m.vencimento})\">${m.status === 'ATIVO' ? '<i class=\"fa-solid fa-ban\"></i> Suspender' : '<i class=\"fa-solid fa-check\"></i> Ativar'}</button>\n");
+        sb.append("                        <button class=\"btn btn-secondary\" style=\"padding: 8px 12px; font-size: 12px; color: var(--danger); border-color: rgba(239,68,68,0.2);\" onclick=\"deletarMensalista('${m.placa}')\"><i class=\"fa-solid fa-trash-can\"></i></button>\n");
+        sb.append("                    </td>\n");
+        sb.append("                `;\n");
+        sb.append("                tbody.appendChild(row);\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function filtrarTabelaMensalistas() {\n");
+        sb.append("            const query = document.getElementById('busca-mensalista').value.toLowerCase();\n");
+        sb.append("            const filtered = mensalistasOriginais.filter(m => \n");
+        sb.append("                m.nomeCliente.toLowerCase().includes(query) || \n");
+        sb.append("                m.placa.toLowerCase().includes(query)\n");
+        sb.append("            );\n");
+        sb.append("            renderizarTabelaMensalistas(filtered);\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function abrirModalNovoMensalista() {\n");
+        sb.append("            document.getElementById('input-m-nome').value = '';\n");
+        sb.append("            document.getElementById('input-m-placa').value = '';\n");
+        sb.append("            document.getElementById('input-m-telefone').value = '';\n");
+        sb.append("            const trintaDias = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];\n");
+        sb.append("            document.getElementById('input-m-vencimento').value = trintaDias;\n");
+        sb.append("            document.getElementById('modal-novo-mensalista').style.display = 'flex';\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function salvarNovoMensalista() {\n");
+        sb.append("            const nome = document.getElementById('input-m-nome').value;\n");
+        sb.append("            const placa = document.getElementById('input-m-placa').value.trim().toUpperCase();\n");
+        sb.append("            const telefone = document.getElementById('input-m-telefone').value;\n");
+        sb.append("            const vencimentoStr = document.getElementById('input-m-vencimento').value;\n");
+        sb.append("            if (!nome || !placa || !vencimentoStr) { mostrarToast('Preencha os campos obrigatórios!', 'error'); return; }\n");
+        sb.append("            const timestamp = new Date(vencimentoStr + 'T23:59:59').getTime();\n");
+        sb.append("            fetch('/api/mensalistas/add', {\n");
+        sb.append("                method: 'POST',\n");
+        sb.append("                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Admin-Token': cachedToken },\n");
+        sb.append("                body: `placa=${placa}&nome=${encodeURIComponent(nome)}&telefone=${encodeURIComponent(telefone)}&vencimento=${timestamp}`\n");
+        sb.append("            })\n");
+        sb.append("            .then(r => r.json())\n");
+        sb.append("            .then(data => {\n");
+        sb.append("                if (data.success) {\n");
+        sb.append("                    fecharModais();\n");
+        sb.append("                    carregarMensalistas();\n");
+        sb.append("                    mostrarToast('Mensalista cadastrado com sucesso!');\n");
+        sb.append("                } else { mostrarToast('Erro ao cadastrar mensalista', 'error'); }\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function abrirModalEditarMensalista(placa, nome, vencimentoMs, status) {\n");
+        sb.append("            document.getElementById('editar-m-placa').value = placa;\n");
+        sb.append("            document.getElementById('editar-m-nome').value = nome;\n");
+        sb.append("            document.getElementById('editar-m-vencimento').value = new Date(vencimentoMs).toISOString().split('T')[0];\n");
+        sb.append("            document.getElementById('editar-m-status').value = status;\n");
+        sb.append("            document.getElementById('modal-editar-mensalista').style.display = 'flex';\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function salvarEdicaoMensalista() {\n");
+        sb.append("            const placa = document.getElementById('editar-m-placa').value;\n");
+        sb.append("            const status = document.getElementById('editar-m-status').value;\n");
+        sb.append("            const vencimentoStr = document.getElementById('editar-m-vencimento').value;\n");
+        sb.append("            const timestamp = new Date(vencimentoStr + 'T23:59:59').getTime();\n");
+        sb.append("            fetch('/api/mensalistas/edit', {\n");
+        sb.append("                method: 'POST',\n");
+        sb.append("                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Admin-Token': cachedToken },\n");
+        sb.append("                body: `placa=${placa}&status=${status}&vencimento=${timestamp}`\n");
+        sb.append("            })\n");
+        sb.append("            .then(r => r.json())\n");
+        sb.append("            .then(data => {\n");
+        sb.append("                if (data.success) {\n");
+        sb.append("                    fecharModais();\n");
+        sb.append("                    carregarMensalistas();\n");
+        sb.append("                    mostrarToast('Assinatura atualizada com sucesso!');\n");
+        sb.append("                } else { mostrarToast('Erro ao atualizar assinatura', 'error'); }\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function toggleStatusMensalista(placa, statusAtual, vencimentoMs) {\n");
+        sb.append("            const novoStatus = statusAtual === 'ATIVO' ? 'SUSPENSO' : 'ATIVO';\n");
+        sb.append("            fetch('/api/mensalistas/edit', {\n");
+        sb.append("                method: 'POST',\n");
+        sb.append("                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Admin-Token': cachedToken },\n");
+        sb.append("                body: `placa=${placa}&status=${novoStatus}&vencimento=${vencimentoMs}`\n");
+        sb.append("            })\n");
+        sb.append("            .then(r => r.json())\n");
+        sb.append("            .then(data => {\n");
+        sb.append("                if (data.success) {\n");
+        sb.append("                    carregarMensalistas();\n");
+        sb.append("                    mostrarToast(`Mensalista ${novoStatus === 'ATIVO' ? 'reativado' : 'suspenso'}!`);\n");
+        sb.append("                } else { mostrarToast('Erro ao alterar status', 'error'); }\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function deletarMensalista(placa) {\n");
+        sb.append("            if (!confirm(`Deseja realmente excluir o mensalista de placa ${placa}?`)) return;\n");
+        sb.append("            fetch('/api/mensalistas/delete', {\n");
+        sb.append("                method: 'POST',\n");
+        sb.append("                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Admin-Token': cachedToken },\n");
+        sb.append("                body: `placa=${placa}`\n");
+        sb.append("            })\n");
+        sb.append("            .then(r => r.json())\n");
+        sb.append("            .then(data => {\n");
+        sb.append("                if (data.success) {\n");
+        sb.append("                    carregarMensalistas();\n");
+        sb.append("                    mostrarToast('Mensalista excluído com sucesso!');\n");
+        sb.append("                } else { mostrarToast('Erro ao excluir mensalista', 'error'); }\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        // --- FATURAMENTO & CAIXA --- \n");
+        sb.append("        function carregarTransacoes() {\n");
+        sb.append("            fetch('/api/faturamento', {\n");
+        sb.append("                headers: { 'X-Admin-Token': cachedToken }\n");
+        sb.append("            })\n");
+        sb.append("            .then(r => r.json())\n");
+        sb.append("            .then(data => {\n");
+        sb.append("                transacoesOriginais = data;\n");
+        sb.append("                aplicarFiltrosData();\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function setPresetPeriod(dias, btnElement) {\n");
+        sb.append("            const parent = btnElement.parentNode;\n");
+        sb.append("            parent.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));\n");
+        sb.append("            btnElement.classList.add('active');\n");
+        sb.append("            const hoje = new Date();\n");
+        sb.append("            if (dias === 0) {\n");
+        sb.append("                document.getElementById('filtro-data-inicio').value = '';\n");
+        sb.append("                document.getElementById('filtro-data-fim').value = '';\n");
+        sb.append("            } else {\n");
+        sb.append("                const anterior = new Date(hoje.getTime() - (dias * 24 * 60 * 60 * 1000));\n");
+        sb.append("                document.getElementById('filtro-data-inicio').value = anterior.toISOString().split('T')[0];\n");
+        sb.append("                document.getElementById('filtro-data-fim').value = hoje.toISOString().split('T')[0];\n");
+        sb.append("            }\n");
+        sb.append("            aplicarFiltrosData();\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function aplicarFiltrosData() {\n");
+        sb.append("            const inicioStr = document.getElementById('filtro-data-inicio').value;\n");
+        sb.append("            const fimStr = document.getElementById('filtro-data-fim').value;\n");
+        sb.append("            let filtradas = transacoesOriginais;\n");
+        sb.append("            if (inicioStr) {\n");
+        sb.append("                const start = new Date(inicioStr + 'T00:00:00').getTime();\n");
+        sb.append("                filtradas = filtradas.filter(t => t.horaSaida >= start);\n");
+        sb.append("            }\n");
+        sb.append("            if (fimStr) {\n");
+        sb.append("                const end = new Date(fimStr + 'T23:59:59').getTime();\n");
+        sb.append("                filtradas = filtradas.filter(t => t.horaSaida <= end);\n");
+        sb.append("            }\n");
+        sb.append("            renderizarAnalisesFaturamento(filtradas);\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function renderizarAnalisesFaturamento(lista) {\n");
+        sb.append("            let total = 0;\n");
+        sb.append("            let permanenciaTotal = 0;\n");
+        sb.append("            let ticketsValidos = 0;\n");
+        sb.append("            const receitaDia = {};\n");
+        sb.append("            const receitaTerminal = {};\n");
+        sb.append("            const tbody = document.querySelector('#tabela-transacoes tbody');\n");
+        sb.append("            tbody.innerHTML = '';\n");
+        sb.append("\n");
+        sb.append("            lista.forEach(t => {\n");
+        sb.append("                total += t.valorPago;\n");
+        sb.append("                const permanenciaMin = Math.round((t.horaSaida - t.horaEntrada) / (1000 * 60));\n");
+        sb.append("                if (permanenciaMin > 0) {\n");
+        sb.append("                    permanenciaTotal += permanenciaMin;\n");
+        sb.append("                    ticketsValidos++;\n");
+        sb.append("                }\n");
+        sb.append("                // Agrupar dia\n");
+        sb.append("                const diaStr = new Date(t.horaSaida).toLocaleDateString('pt-BR');\n");
+        sb.append("                receitaDia[diaStr] = (receitaDia[diaStr] || 0) + t.valorPago;\n");
+        sb.append("                // Agrupar terminal\n");
+        sb.append("                const term = t.hardwareId || 'Terminal Desconhecido';\n");
+        sb.append("                receitaTerminal[term] = (receitaTerminal[term] || 0) + t.valorPago;\n");
+        sb.append("\n");
+        sb.append("                // Inserir tabela\n");
+        sb.append("                const ent = new Date(t.horaEntrada).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) + ' ' + new Date(t.horaEntrada).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });\n");
+        sb.append("                const sai = new Date(t.horaSaida).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) + ' ' + new Date(t.horaSaida).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });\n");
+        sb.append("                const r = document.createElement('tr');\n");
+        sb.append("                r.innerHTML = `\n");
+        sb.append("                    <td><span class=\"badge btn-secondary\" style=\"font-family: monospace; font-size: 13px;\">${t.placa}</span></td>\n");
+        sb.append("                    <td>${ent}</td>\n");
+        sb.append("                    <td>${sai}</td>\n");
+        sb.append("                    <td>${formatarMinutos(permanenciaMin)}</td>\n");
+        sb.append("                    <td style=\"font-weight: 600; color: var(--success);\">R$ ${t.valorPago.toFixed(2).replace('.', ',')}</td>\n");
+        sb.append("                    <td><span class=\"badge btn-secondary\" style=\"font-size: 11px;\">${t.hardwareId.substring(0,8) || '-'}</span></td>\n");
+        sb.append("                `;\n");
+        sb.append("                tbody.appendChild(r);\n");
+        sb.append("            });\n");
+        sb.append("\n");
+        sb.append("            if (lista.length === 0) {\n");
+        sb.append("                tbody.innerHTML = '<tr><td colspan=\"6\" style=\"text-align: center; color: var(--text-muted); padding: 30px;\">Nenhuma transação encontrada no período</td></tr>';\n");
+        sb.append("            }\n");
+        sb.append("\n");
+        sb.append("            // Atualizar KPIs\n");
+        sb.append("            document.getElementById('total-faturamento').textContent = 'R$ ' + total.toFixed(2).replace('.', ',');\n");
+        sb.append("            const permMedia = ticketsValidos > 0 ? Math.round(permanenciaTotal / ticketsValidos) : 0;\n");
+        sb.append("            document.getElementById('media-permanencia').textContent = formatarMinutos(permMedia);\n");
+        sb.append("            const tickMedio = ticketsValidos > 0 ? (total / ticketsValidos) : 0;\n");
+        sb.append("            document.getElementById('ticket-medio').textContent = 'R$ ' + tickMedio.toFixed(2).replace('.', ',');\n");
+        sb.append("\n");
+        sb.append("            // Renderizar gráficos\n");
+        sb.append("            renderizarGraficoLinha(receitaDia);\n");
+        sb.append("            renderizarGraficoRosca(receitaTerminal);\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function formatarMinutos(minutos) {\n");
+        sb.append("            if (minutos < 60) return `${minutos} min`;\n");
+        sb.append("            const h = Math.floor(minutos / 60);\n");
+        sb.append("            const m = minutos % 60;\n");
+        sb.append("            return m > 0 ? `${h}h ${m}m` : `${h}h`;\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function filtrarTabelaTransacoes() {\n");
+        sb.append("            const query = document.getElementById('busca-transacao').value.toLowerCase();\n");
+        sb.append("            const trs = document.querySelectorAll('#tabela-transacoes tbody tr');\n");
+        sb.append("            trs.forEach(tr => {\n");
+        sb.append("                const text = tr.cells[0] ? tr.cells[0].textContent.toLowerCase() : '';\n");
+        sb.append("                tr.style.display = text.includes(query) ? '' : 'none';\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function renderizarGraficoLinha(dados) {\n");
+        sb.append("            const ctx = document.getElementById('chart-receita-diaria').getContext('2d');\n");
+        sb.append("            const labels = Object.keys(dados).reverse();\n");
+        sb.append("            const valores = Object.values(dados).reverse();\n");
+        sb.append("            if (chartReceita) chartReceita.destroy();\n");
+        sb.append("            chartReceita = new Chart(ctx, {\n");
+        sb.append("                type: 'line',\n");
+        sb.append("                data: {\n");
+        sb.append("                    labels: labels,\n");
+        sb.append("                    datasets: [{\n");
+        sb.append("                        label: 'Faturamento R$',\n");
+        sb.append("                        data: valores,\n");
+        sb.append("                        borderColor: '#6366f1',\n");
+        sb.append("                        backgroundColor: 'rgba(99, 102, 241, 0.1)',\n");
+        sb.append("                        borderWidth: 3,\n");
+        sb.append("                        fill: true,\n");
+        sb.append("                        tension: 0.3\n");
+        sb.append("                    }]\n");
+        sb.append("                },\n");
+        sb.append("                options: {\n");
+        sb.append("                    responsive: true, maintainAspectRatio: false,\n");
+        sb.append("                    plugins: { legend: { display: false } },\n");
+        sb.append("                    scales: {\n");
+        sb.append("                        y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#9ca3af' } },\n");
+        sb.append("                        x: { grid: { display: false }, ticks: { color: '#9ca3af' } }\n");
+        sb.append("                    }\n");
+        sb.append("                }\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function renderizarGraficoRosca(dados) {\n");
+        sb.append("            const ctx = document.getElementById('chart-receita-terminal').getContext('2d');\n");
+        sb.append("            const labels = Object.keys(dados).map(k => k.substring(0,8));\n");
+        sb.append("            const valores = Object.values(dados);\n");
+        sb.append("            if (chartTerminal) chartTerminal.destroy();\n");
+        sb.append("            chartTerminal = new Chart(ctx, {\n");
+        sb.append("                type: 'doughnut',\n");
+        sb.append("                data: {\n");
+        sb.append("                    labels: labels,\n");
+        sb.append("                    datasets: [{\n");
+        sb.append("                        data: valores,\n");
+        sb.append("                        backgroundColor: ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#3b82f6', '#8b5cf6'],\n");
+        sb.append("                        borderWidth: 0\n");
+        sb.append("                    }]\n");
+        sb.append("                },\n");
+        sb.append("                options: {\n");
+        sb.append("                    responsive: true, maintainAspectRatio: false,\n");
+        sb.append("                    plugins: { legend: { position: 'bottom', labels: { color: '#f3f4f6', boxWidth: 12 } } }\n");
+        sb.append("                }\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        // --- TERMINAIS & DISPOSITIVOS ---\n");
+        sb.append("        function carregarTerminais() {\n");
+        sb.append("            fetch('/api/devices', {\n");
+        sb.append("                headers: { 'X-Admin-Token': cachedToken }\n");
+        sb.append("            })\n");
+        sb.append("            .then(r => r.json())\n");
+        sb.append("            .then(data => {\n");
+        sb.append("                document.getElementById('count-terminais').textContent = data.filter(t => t.status === 'APROVADO').length;\n");
+        sb.append("                renderizarTerminais(data);\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function renderizarTerminais(lista) {\n");
+        sb.append("            const tbody = document.querySelector('#tabela-terminais tbody');\n");
+        sb.append("            tbody.innerHTML = '';\n");
+        sb.append("            if (lista.length === 0) {\n");
+        sb.append("                tbody.innerHTML = '<tr><td colspan=\"8\" style=\"text-align: center; color: var(--text-muted); padding: 30px;\">Nenhum terminal identificado</td></tr>';\n");
+        sb.append("                return;\n");
+        sb.append("            }\n");
+        sb.append("            lista.forEach(t => {\n");
+        sb.append("                const expStr = t.dataExpiracao > 0 ? new Date(t.dataExpiracao).toLocaleDateString('pt-BR') : '-';\n");
+        sb.append("                const status = t.status ? t.status.toUpperCase() : 'PENDENTE';\n");
+        sb.append("                let badge = 'badge-warning';\n");
+        sb.append("                if (status === 'APROVADO') badge = 'badge-success';\n");
+        sb.append("                if (status === 'BLOQUEADO') badge = 'badge-danger';\n");
+        sb.append("\n");
+        sb.append("                const r = document.createElement('tr');\n");
+        sb.append("                r.innerHTML = `\n");
+        sb.append("                    <td>\n");
+        sb.append("                        <div style=\"font-weight: 600;\">${t.nomeAparelho}</div>\n");
+        sb.append("                        <div style=\"font-size: 12px; color: var(--text-muted);\"><i class=\"fa-brands ${t.soTipo === 'Android' ? 'fa-android' : 'fa-windows'}\"></i> ${t.soTipo}</div>\n");
+        sb.append("                    </td>\n");
+        sb.append("                    <td style=\"font-family: monospace; font-size: 13px;\">${t.hardwareId}</td>\n");
+        sb.append("                    <td>\n");
+        sb.append("                        <div style=\"font-weight: 500;\">${t.nomeCliente || 'Pátio não configurado'}</div>\n");
+        sb.append("                        ${t.nomeClientePendente ? `<div style=\"font-size:11px; color:var(--warning);\">Pendente: ${t.nomeClientePendente}</div>` : ''}\n");
+        sb.append("                    </td>\n");
+        sb.append("                    <td>R$ ${t.tarifaHora.toFixed(2).replace('.', ',')}</td>\n");
+        sb.append("                    <td>🚗 ${t.vagasCarro} / 🏍️ ${t.vagasMoto}</td>\n");
+        sb.append("                    <td>${expStr}</td>\n");
+        sb.append("                    <td><span class=\"badge ${badge}\">${status}</span></td>\n");
+        sb.append("                    <td style=\"text-align: right; display: flex; gap: 8px; justify-content: flex-end;\">\n");
+        sb.append("                        ${status !== 'APROVADO' ? `<button class=\"btn btn-primary\" style=\"padding: 8px 12px; font-size: 12px;\" onclick=\"abrirModalAprovarTerminal('${t.hardwareId}', ${t.diasLicencaPendente || 30})\"><i class=\"fa-solid fa-key\"></i> Liberar</button>` : ''}\n");
+        sb.append("                        ${status === 'APROVADO' ? `<button class=\"btn btn-secondary\" style=\"padding: 8px 12px; font-size: 12px; color: var(--danger); border-color: rgba(239,68,68,0.2);\" onclick=\"bloquearTerminal('${t.hardwareId}')\"><i class=\"fa-solid fa-ban\"></i> Bloquear</button>` : ''}\n");
+        sb.append("                    </td>\n");
+        sb.append("                `;\n");
+        sb.append("                tbody.appendChild(r);\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function abrirModalAprovarTerminal(hwid, dias) {\n");
+        sb.append("            document.getElementById('aprovar-t-hwid').value = hwid;\n");
+        sb.append("            document.getElementById('aprovar-t-dias').value = dias || 30;\n");
+        sb.append("            document.getElementById('modal-aprovar-terminal').style.display = 'flex';\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function salvarAprovacaoTerminal() {\n");
+        sb.append("            const hwid = document.getElementById('aprovar-t-hwid').value;\n");
+        sb.append("            const dias = document.getElementById('aprovar-t-dias').value;\n");
+        sb.append("            fetch('/api/approve', {\n");
+        sb.append("                method: 'POST',\n");
+        sb.append("                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Admin-Token': cachedToken },\n");
+        sb.append("                body: `hardwareId=${hwid}&dias=${dias}`\n");
+        sb.append("            })\n");
+        sb.append("            .then(r => r.json())\n");
+        sb.append("            .then(data => {\n");
+        sb.append("                if (data.success) {\n");
+        sb.append("                    fecharModais();\n");
+        sb.append("                    carregarTerminais();\n");
+        sb.append("                    mostrarToast('Terminal aprovado com sucesso!');\n");
+        sb.append("                } else { mostrarToast('Erro ao aprovar terminal', 'error'); }\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        function bloquearTerminal(hwid) {\n");
+        sb.append("            if (!confirm(`Deseja realmente bloquear a licença do terminal ${hwid}?`)) return;\n");
+        sb.append("            fetch('/api/block', {\n");
+        sb.append("                method: 'POST',\n");
+        sb.append("                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Admin-Token': cachedToken },\n");
+        sb.append("                body: `hardwareId=${hwid}`\n");
+        sb.append("            })\n");
+        sb.append("            .then(r => r.json())\n");
+        sb.append("            .then(data => {\n");
+        sb.append("                if (data.success) {\n");
+        sb.append("                    carregarTerminais();\n");
+        sb.append("                    mostrarToast('Terminal bloqueado com sucesso!');\n");
+        sb.append("                } else { mostrarToast('Erro ao bloquear terminal', 'error'); }\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("\n");
+        sb.append("        // --- LOGS DE AUDITORIA DE SEGURANÇA ---\n");
+        sb.append("        function carregarLogs() {\n");
+        sb.append("            fetch('/api/audit-logs', {\n");
+        sb.append("                headers: { 'X-Admin-Token': cachedToken }\n");
+        sb.append("            })\n");
+        sb.append("            .then(r => r.json())\n");
+        sb.append("            .then(data => {\n");
+        sb.append("                const box = document.getElementById('box-logs');\n");
+        sb.append("                box.innerHTML = '';\n");
+        sb.append("                if (data.length === 0) {\n");
+        sb.append("                    box.innerHTML = '<div style=\"color: var(--text-muted); text-align: center; padding: 20px;\">Nenhum log de auditoria registrado ainda.</div>';\n");
+        sb.append("                    return;\n");
+        sb.append("                }\n");
+        sb.append("                data.slice().reverse().forEach(log => {\n");
+        sb.append("                    const d = document.createElement('div');\n");
+        sb.append("                    d.style.marginBottom = '6px';\n");
+        sb.append("                    // Destacar alertas importantes\n");
+        sb.append("                    if (log.includes('[CRITICAL]') || log.includes('AVARIA') || log.includes('INCOMPATIBILIDADE')) {\n");
+        sb.append("                        d.style.color = '#ef4444';\n");
+        sb.append("                        d.innerHTML = `<i class=\"fa-solid fa-triangle-exclamation\"></i> ${log}`;\n");
+        sb.append("                    } else if (log.includes('[PAGAMENTO]') || log.includes('SUCESSO')) {\n");
+        sb.append("                        d.style.color = '#10b981';\n");
+        sb.append("                        d.innerHTML = `<i class=\"fa-solid fa-circle-check\"></i> ${log}`;\n");
+        sb.append("                    } else {\n");
+        sb.append("                        d.style.color = '#9ca3af';\n");
+        sb.append("                        d.innerHTML = `<i class=\"fa-solid fa-circle-info\"></i> ${log}`;\n");
+        sb.append("                    }\n");
+        sb.append("                    box.appendChild(d);\n");
+        sb.append("                });\n");
+        sb.append("            });\n");
+        sb.append("        }\n");
+        sb.append("    </script>\n");
+        sb.append("</body>\n");
+        sb.append("</html>\n");
+        return sb.toString();
     }
 }

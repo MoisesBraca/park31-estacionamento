@@ -19,6 +19,8 @@ public class Veiculo {
     private boolean lavagemConcluida;
     
     private int vagaId; // Campo necessário para o repositório Pro
+    private String fotoAvariaPath;
+    private String pixTxId;
 
     @Ignore
     public Veiculo(@NonNull String placa) {
@@ -69,4 +71,9 @@ public class Veiculo {
     public int getVagaId() { return vagaId; }
     public void setVagaId(int vagaId) { this.vagaId = vagaId; }
     public boolean isEstacionado() { return horaSaida == 0; }
+
+    public String getFotoAvariaPath() { return fotoAvariaPath; }
+    public void setFotoAvariaPath(String fotoAvariaPath) { this.fotoAvariaPath = fotoAvariaPath; }
+    public String getPixTxId() { return pixTxId; }
+    public void setPixTxId(String pixTxId) { this.pixTxId = pixTxId; }
 }

@@ -17,8 +17,21 @@ public class EstacionamentoRepository {
             Class.forName("org.sqlite.JDBC");
         } catch (ClassNotFoundException e) {
         }
-        return DriverManager.getConnection(URL_CONEXAO);
+        return DriverManager.getConnection(obterUrlConexao());
     }
+
+    private static String obterUrlConexao() {
+        String dbPathEnv = System.getenv("DB_PATH");
+        if (dbPathEnv != null && !dbPathEnv.isEmpty()) {
+            return "jdbc:sqlite:" + dbPathEnv;
+        }
+        java.io.File dataDir = new java.io.File("/data");
+        if (dataDir.exists() && dataDir.isDirectory() && dataDir.canWrite()) {
+            return "jdbc:sqlite:/data/db_estacionamento.db";
+        }
+        return "jdbc:sqlite:./db_estacionamento.db";
+    }
+
 
     private void inicializarBanco() {
         String sqlVeiculos = "CREATE TABLE IF NOT EXISTS veiculos ("
@@ -33,7 +46,8 @@ public class EstacionamentoRepository {
                              + "  hora_entrada INTEGER NOT NULL,"
                              + "  hora_saida INTEGER NOT NULL,"
                              + "  valor_pago REAL NOT NULL,"
-                             + "  tarifa_cobrada REAL NOT NULL"
+                             + "  tarifa_cobrada REAL NOT NULL,"
+                             + "  hardware_id TEXT"
                              + ");";
 
         String sqlConfig = "CREATE TABLE IF NOT EXISTS configuracoes ("
@@ -54,12 +68,22 @@ public class EstacionamentoRepository {
                             + "  vagas_moto INTEGER DEFAULT 5"
                             + ");";
 
+        String sqlMensalistas = "CREATE TABLE IF NOT EXISTS mensalistas ("
+                              + "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                              + "  placa TEXT UNIQUE NOT NULL,"
+                              + "  nome_cliente TEXT NOT NULL,"
+                              + "  telefone TEXT,"
+                              + "  vencimento INTEGER NOT NULL,"
+                              + "  status TEXT DEFAULT 'ATIVO'"
+                              + ");";
+
         try (Connection conn = obterConexao();
              Statement stmt = conn.createStatement()) {
             stmt.execute(sqlVeiculos);
             stmt.execute(sqlTransacoes);
             stmt.execute(sqlConfig);
             stmt.execute(sqlTerminais);
+            stmt.execute(sqlMensalistas);
         } catch (SQLException e) {
             System.err.println("Erro ao inicializar o banco de dados SQLite: " + e.getMessage());
         }
@@ -74,7 +98,8 @@ public class EstacionamentoRepository {
             "ALTER TABLE terminais ADD COLUMN vagas_carro_pendente INTEGER DEFAULT -1;",
             "ALTER TABLE terminais ADD COLUMN vagas_moto_pendente INTEGER DEFAULT -1;",
             "ALTER TABLE terminais ADD COLUMN dias_licenca_pendente INTEGER DEFAULT -1;",
-            "ALTER TABLE terminais ADD COLUMN ultimo_ping INTEGER DEFAULT 0;"
+            "ALTER TABLE terminais ADD COLUMN ultimo_ping INTEGER DEFAULT 0;",
+            "ALTER TABLE transacoes ADD COLUMN hardware_id TEXT;"
         };
         for (String alter : alterStatements) {
             try (Connection conn = obterConexao();
@@ -439,5 +464,103 @@ public class EstacionamentoRepository {
         } catch (SQLException e) {
             System.err.println("Erro ao excluir terminal do SQLite: " + e.getMessage());
         }
+    }
+
+    public void adicionarMensalista(String placa, String nome, String telefone, long vencimento) {
+        String sql = "INSERT OR REPLACE INTO mensalistas (placa, nome_cliente, telefone, vencimento, status) VALUES (?, ?, ?, ?, 'ATIVO');";
+        try (Connection conn = obterConexao();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, placa.toUpperCase().trim());
+            pstmt.setString(2, nome);
+            pstmt.setString(3, telefone);
+            pstmt.setLong(4, vencimento);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            System.err.println("Erro ao adicionar mensalista: " + e.getMessage());
+        }
+    }
+
+    public void atualizarMensalista(String placa, String status, long vencimento) {
+        String sql = "UPDATE mensalistas SET status = ?, vencimento = ? WHERE placa = ?;";
+        try (Connection conn = obterConexao();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, status);
+            pstmt.setLong(2, vencimento);
+            pstmt.setString(3, placa.toUpperCase().trim());
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            System.err.println("Erro ao atualizar mensalista: " + e.getMessage());
+        }
+    }
+
+    public void excluirMensalista(String placa) {
+        String sql = "DELETE FROM mensalistas WHERE placa = ?;";
+        try (Connection conn = obterConexao();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, placa.toUpperCase().trim());
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            System.err.println("Erro ao excluir mensalista: " + e.getMessage());
+        }
+    }
+
+    public List<MensalistaInfo> listarMensalistas() {
+        List<MensalistaInfo> lista = new ArrayList<>();
+        String sql = "SELECT id, placa, nome_cliente, telefone, vencimento, status FROM mensalistas ORDER BY nome_cliente ASC;";
+        try (Connection conn = obterConexao();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                lista.add(new MensalistaInfo(
+                    rs.getInt("id"),
+                    rs.getString("placa"),
+                    rs.getString("nome_cliente"),
+                    rs.getString("telefone"),
+                    rs.getLong("vencimento"),
+                    rs.getString("status")
+                ));
+            }
+        } catch (SQLException e) {
+            System.err.println("Erro ao listar mensalistas: " + e.getMessage());
+        }
+        return lista;
+    }
+
+    public void salvarTransacaoSincronizada(Transacao t) {
+        String sql = "INSERT INTO transacoes (placa, hora_entrada, hora_saida, valor_pago, tarifa_cobrada, hardware_id) VALUES (?, ?, ?, ?, ?, ?);";
+        try (Connection conn = obterConexao();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, t.getPlaca());
+            pstmt.setLong(2, t.getHoraEntrada());
+            pstmt.setLong(3, t.getHoraSaida());
+            pstmt.setDouble(4, t.getValorPago());
+            pstmt.setDouble(5, t.getTarifaCobrada());
+            pstmt.setString(6, t.getHardwareId());
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            System.err.println("Erro ao salvar transacao sincronizada: " + e.getMessage());
+        }
+    }
+
+    public List<Transacao> listarTodasTransacoes() {
+        List<Transacao> lista = new ArrayList<>();
+        String sql = "SELECT placa, hora_entrada, hora_saida, valor_pago, tarifa_cobrada, hardware_id FROM transacoes ORDER BY hora_saida DESC;";
+        try (Connection conn = obterConexao();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                lista.add(new Transacao(
+                    rs.getString("placa"),
+                    rs.getLong("hora_entrada"),
+                    rs.getLong("hora_saida"),
+                    rs.getDouble("valor_pago"),
+                    rs.getDouble("tarifa_cobrada"),
+                    rs.getString("hardware_id")
+                ));
+            }
+        } catch (SQLException e) {
+            System.err.println("Erro ao listar todas transacoes: " + e.getMessage());
+        }
+        return lista;
     }
 }

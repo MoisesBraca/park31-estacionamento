@@ -7,8 +7,8 @@ import androidx.room.Room;
 import androidx.room.RoomDatabase;
 import androidx.sqlite.db.SupportSQLiteDatabase;
 
-@Database(entities = {Veiculo.class, Transacao.class, Vaga.class, TarifaConfig.class, AuditLog.class}, 
-          version = 11, 
+@Database(entities = {Veiculo.class, Transacao.class, Vaga.class, TarifaConfig.class, AuditLog.class, Mensalista.class}, 
+          version = 13, 
           exportSchema = false)
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -16,6 +16,7 @@ public abstract class AppDatabase extends RoomDatabase {
     public abstract VagaDao vagaDao();
     public abstract TarifaConfigDao tarifaConfigDao();
     public abstract AuditLogDao auditLogDao();
+    public abstract MensalistaDao mensalistaDao();
 
     private static volatile AppDatabase INSTANCE;
 
@@ -25,6 +26,7 @@ public abstract class AppDatabase extends RoomDatabase {
                 if (INSTANCE == null) {
                     INSTANCE = Room.databaseBuilder(context.getApplicationContext(),
                                     AppDatabase.class, "estacionamento_db")
+                            .fallbackToDestructiveMigration()
                             .addCallback(SEED_CALLBACK)
                             .build();
                 }
