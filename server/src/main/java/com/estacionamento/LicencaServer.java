@@ -2106,7 +2106,7 @@ public class LicencaServer {
         sb.append("                const expStr = t.dataExpiracao > 0 ? new Date(t.dataExpiracao).toLocaleDateString('pt-BR') : '-';\n");
         sb.append("                const status = t.status ? t.status.toUpperCase() : 'PENDENTE';\n");
         sb.append("                let badge = 'badge-warning';\n");
-        sb.append("                if (status === 'APROVADO') badge = 'badge-success';\n");
+        sb.append("                if (status === 'ATIVO') badge = 'badge-success';\n");
         sb.append("                if (status === 'BLOQUEADO') badge = 'badge-danger';\n");
         sb.append("\n");
         sb.append("                const r = document.createElement('tr');\n");
@@ -2125,9 +2125,9 @@ public class LicencaServer {
         sb.append("                    <td>${expStr}</td>\n");
         sb.append("                    <td><span class=\"badge ${badge}\">${status}</span></td>\n");
         sb.append("                    <td style=\"text-align: right; display: flex; gap: 8px; justify-content: flex-end;\">\n");
-        sb.append("                        ${status !== 'APROVADO' ? `<button class=\"btn btn-primary\" style=\"padding: 8px 12px; font-size: 12px;\" onclick=\"abrirModalAprovarTerminal('${t.hardwareId}', ${t.diasLicencaPendente || 30})\"><i class=\"fa-solid fa-key\"></i> Liberar</button>` : ''}\n");
-        sb.append("                        ${status === 'APROVADO' ? `<button class=\"btn btn-secondary\" style=\"padding: 8px 12px; font-size: 12px;\" onclick=\"abrirModalConfigTerminal('${t.hardwareId}', '${t.nomeCliente || ''}', ${t.tarifaHora}, ${t.vagasCarro}, ${t.vagasMoto})\"><i class=\"fa-solid fa-gear\"></i> Configurar</button>` : ''}\n");
-        sb.append("                        ${status === 'APROVADO' ? `<button class=\"btn btn-secondary\" style=\"padding: 8px 12px; font-size: 12px; color: var(--danger); border-color: rgba(239,68,68,0.2);\" onclick=\"bloquearTerminal('${t.hardwareId}')\"><i class=\"fa-solid fa-ban\"></i> Bloquear</button>` : ''}\n");
+        sb.append("                        ${status !== 'ATIVO' ? `<button class=\"btn btn-primary\" style=\"padding: 8px 12px; font-size: 12px;\" onclick=\"abrirModalAprovarTerminal('${t.hardwareId}', ${t.diasLicencaPendente || 30})\"><i class=\"fa-solid fa-key\"></i> Liberar</button>` : ''}\n");
+        sb.append("                        ${status === 'ATIVO' ? `<button class=\"btn btn-secondary\" style=\"padding: 8px 12px; font-size: 12px;\" onclick=\"abrirModalConfigTerminal('${t.hardwareId}', '${t.nomeCliente || ''}', ${t.tarifaHora}, ${t.vagasCarro}, ${t.vagasMoto})\"><i class=\"fa-solid fa-gear\"></i> Configurar</button>` : ''}\n");
+        sb.append("                        ${status === 'ATIVO' ? `<button class=\"btn btn-secondary\" style=\"padding: 8px 12px; font-size: 12px; color: var(--danger); border-color: rgba(239,68,68,0.2);\" onclick=\"bloquearTerminal('${t.hardwareId}')\"><i class=\"fa-solid fa-ban\"></i> Bloquear</button>` : ''}\n");
         sb.append("                    </td>\n");
         sb.append("                `;\n");
         sb.append("                tbody.appendChild(r);\n");
