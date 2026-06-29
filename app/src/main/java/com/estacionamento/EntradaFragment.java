@@ -40,6 +40,17 @@ public class EntradaFragment extends Fragment {
         });
 
     @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        getParentFragmentManager().setFragmentResultListener("ocr_result", this, (requestKey, result) -> {
+            String placa = result.getString("placa_detectada");
+            if (placa != null && binding != null) {
+                binding.etEntradaPlaca.setText(placa);
+            }
+        });
+    }
+
+    @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         binding = FragmentEntradaBinding.inflate(inflater, container, false);
         viewModel = new ViewModelProvider(requireActivity()).get(EntradaViewModel.class);
