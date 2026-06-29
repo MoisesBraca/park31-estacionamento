@@ -18,6 +18,10 @@ import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import br.com.uol.pagseguro.plugpagservice.wrapper.PlugPag;
+import br.com.uol.pagseguro.plugpagservice.wrapper.PlugPagAppIdentification;
+import br.com.uol.pagseguro.plugpagservice.wrapper.PlugPagPrintResult;
+import br.com.uol.pagseguro.plugpagservice.wrapper.PlugPagPrinterData;
 import java.util.UUID;
 
 public class ComprovanteBuilder {
@@ -28,7 +32,7 @@ public class ComprovanteBuilder {
 
     public static String buildText(String placa, long entrada, long saida,
                                     double totalPago, double tarifa, double troco,
-                                    String formaPagamento, String operador) {
+                                    String formaPagamento, String operador, String cpfCnpj) {
         SimpleDateFormat df = new SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault());
         long minutos = (saida - entrada) / 60000;
 
@@ -50,6 +54,9 @@ public class ComprovanteBuilder {
         }
         sb.append("Pagamento:  ").append(formaPagamento).append("\n");
         sb.append("--------------------------------\n");
+        if (cpfCnpj != null && !cpfCnpj.trim().isEmpty()) {
+            sb.append("CPF/CNPJ:   ").append(cpfCnpj).append("\n");
+        }
         sb.append("Operador:   ").append(operador).append("\n");
         sb.append("================================\n");
         sb.append("    Obrigado pela preferência!\n");
@@ -61,7 +68,7 @@ public class ComprovanteBuilder {
 
     public static Uri gerarPdf(Context context, String placa, long entrada, long saida,
                                 double totalPago, double tarifa, double troco,
-                                String formaPagamento, String operador) {
+                                String formaPagamento, String operador, String cpfCnpj) {
         try {
             SimpleDateFormat df = new SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault());
             long minutos = (saida - entrada) / 60000;
@@ -96,6 +103,9 @@ public class ComprovanteBuilder {
             }
             y = drawRow(c, p, "Pagamento:", formaPagamento, y);
             y = drawLine(c, p, y);
+            if (cpfCnpj != null && !cpfCnpj.trim().isEmpty()) {
+                y = drawRow(c, p, "CPF/CNPJ:", cpfCnpj, y);
+            }
             y = drawRow(c, p, "Operador:", operador, y);
             y = drawLine(c, p, y);
             y += 8;
@@ -146,6 +156,25 @@ public class ComprovanteBuilder {
             out.close();
             socket.close();
         } catch (Exception ignored) {}
+    }
+
+    public static void imprimirSmartPos(Context context, String text) {
+        new Thread(() -> {
+            try {
+                PlugPag plugPag = new PlugPag(context);
+                
+                // Configura os dados de impressão do SmartPOS
+                PlugPagPrinterData printerData = new PlugPagPrinterData(
+                        "e:\n" + // e: (espaçamento)
+                        text + "\n\n",
+                        4, // Steps (linhas em branco no fim para poder cortar)
+                        0  // 0 para impressão normal
+                );
+
+                PlugPagPrintResult result = plugPag.printFromFile(printerData);
+                // Opcional: checar result.getResult() == PlugPag.RET_OK
+            } catch (Exception ignored) {}
+        }).start();
     }
 
     private static int drawCenter(Canvas c, Paint p, String text, int y) {

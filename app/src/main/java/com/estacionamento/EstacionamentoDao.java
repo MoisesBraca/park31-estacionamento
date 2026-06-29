@@ -39,6 +39,12 @@ public interface EstacionamentoDao {
     @Query("SELECT COUNT(*) FROM transacoes")
     LiveData<Integer> getTotalAtendidos();
 
+    @Query("SELECT SUM(valorPago) FROM transacoes WHERE horaSaida >= :inicioDia")
+    LiveData<Double> getReceitaTotalDia(long inicioDia);
+
+    @Query("SELECT COUNT(*) FROM transacoes WHERE horaSaida >= :inicioDia")
+    LiveData<Integer> getTotalAtendidosDia(long inicioDia);
+
     @Query("SELECT * FROM transacoes WHERE horaSaida BETWEEN :inicio AND :fim ORDER BY horaSaida DESC")
     LiveData<List<Transacao>> getTransacoesByPeriodo(long inicio, long fim);
 

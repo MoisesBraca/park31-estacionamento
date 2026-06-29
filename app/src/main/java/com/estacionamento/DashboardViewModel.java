@@ -5,6 +5,7 @@ import androidx.annotation.NonNull;
 import androidx.lifecycle.AndroidViewModel;
 import androidx.lifecycle.LiveData;
 import java.util.List;
+import java.util.Calendar;
 
 public class DashboardViewModel extends AndroidViewModel {
 
@@ -21,8 +22,16 @@ public class DashboardViewModel extends AndroidViewModel {
         repository = EstacionamentoRepository.getInstance(application);
         veiculosEstacionados = repository.getVeiculosEstacionados();
         transacoesRecentes = repository.getAllTransacoes();
-        receitaTotal = repository.getReceitaTotal();
-        totalAtendidos = repository.getTotalAtendidos();
+        
+        Calendar cal = Calendar.getInstance();
+        cal.set(Calendar.HOUR_OF_DAY, 0);
+        cal.set(Calendar.MINUTE, 0);
+        cal.set(Calendar.SECOND, 0);
+        cal.set(Calendar.MILLISECOND, 0);
+        long inicioDoDia = cal.getTimeInMillis();
+        
+        receitaTotal = repository.getReceitaTotalDia(inicioDoDia);
+        totalAtendidos = repository.getTotalAtendidosDia(inicioDoDia);
         vagasLivres = repository.getVagasLivres();
         vagasOcupadas = repository.getVagasOcupadas();
     }

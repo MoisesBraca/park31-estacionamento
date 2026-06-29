@@ -25,6 +25,11 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Set;
+import br.com.uol.pagseguro.plugpagservice.wrapper.PlugPag;
+import br.com.uol.pagseguro.plugpagservice.wrapper.PlugPagAppIdentification;
+import br.com.uol.pagseguro.plugpagservice.wrapper.PlugPagInitializationResult;
+import br.com.uol.pagseguro.plugpagservice.wrapper.PlugPagPaymentData;
+import br.com.uol.pagseguro.plugpagservice.wrapper.PlugPagTransactionResult;
 
 public class SaidaFragment extends Fragment {
 
@@ -191,16 +196,18 @@ public class SaidaFragment extends Fragment {
                     : "Dinheiro";
 
                 String msg = String.format("Saída realizada!\nTroco: R$ %.2f\nPagamento: %s", Math.max(0, troco), forma);
+                String cpfCnpj = binding.etSaidaCpf.getText() != null ? binding.etSaidaCpf.getText().toString().trim() : "";
 
                 new MaterialAlertDialogBuilder(requireContext())
                         .setTitle("Sucesso")
                         .setMessage(msg)
-                        .setPositiveButton("Comprovante", (d, w) -> mostrarDialogoComprovante(t, t.getPlaca(), troco, forma))
+                        .setPositiveButton("Comprovante", (d, w) -> mostrarDialogoComprovante(t, t.getPlaca(), troco, forma, cpfCnpj))
                         .setNeutralButton("OK", null)
                         .show();
 
                 // FIX: Clear UI after success
                 binding.etSaidaPlaca.setText("");
+                if (binding.etSaidaCpf != null) binding.etSaidaCpf.setText("");
                 binding.cardSaidaDetalhes.setVisibility(View.GONE);
                 binding.cardSaidaAvaria.setVisibility(View.GONE);
                 veiculoAtual = null;
@@ -297,13 +304,62 @@ public class SaidaFragment extends Fragment {
         RadioButton rb = binding.rgPagamento.findViewById(selectedId);
         String formaPagamento = rb != null ? rb.getText().toString() : "Dinheiro";
 
-        if (formaPagamento.contains("Pix")) {
-            requisitarPixDinamico(valorPago, veiculoAtual.getPlaca(), formaPagamento);
+        if (formaPagamento.contains("Pix") || formaPagamento.contains("Crédito") || formaPagamento.contains("Débito") || formaPagamento.contains("Debito") || formaPagamento.contains("Cartão")) {
+            iniciarPagamentoSmartPos(valorPago, formaPagamento);
         } else if (formaPagamento.contains("NFC")) {
             mostrarSimulacaoNFC(valorPago, formaPagamento);
         } else {
             processarSaidaFinal(valorPago, formaPagamento);
         }
+    }
+
+    private void iniciarPagamentoSmartPos(double valor, String formaPagamento) {
+        final com.google.android.material.dialog.MaterialAlertDialogBuilder dialogBuilder = 
+            new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+                .setTitle("PagSeguro")
+                .setMessage("Processando pagamento na maquininha...")
+                .setCancelable(false);
+        final androidx.appcompat.app.AlertDialog dialog = dialogBuilder.show();
+
+        new Thread(() -> {
+            try {
+                PlugPag plugPag = new PlugPag(requireContext());
+
+                PlugPagInitializationResult initResult = plugPag.initializeAndActivatePinpad(new br.com.uol.pagseguro.plugpagservice.wrapper.PlugPagActivationData("")); // Código de ativação vazio p/ usar o ativado no terminal
+                
+                int type = PlugPag.TYPE_CREDITO;
+                if (formaPagamento.toLowerCase().contains("débito") || formaPagamento.toLowerCase().contains("debito")) {
+                    type = PlugPag.TYPE_DEBITO;
+                } else if (formaPagamento.toLowerCase().contains("pix")) {
+                    type = PlugPag.TYPE_PIX;
+                }
+
+                PlugPagPaymentData paymentData = new PlugPagPaymentData(
+                        type,
+                        (int) (valor * 100),
+                        PlugPag.INSTALLMENT_TYPE_A_VISTA,
+                        1,
+                        "Estacionamento",
+                        true
+                );
+
+                PlugPagTransactionResult result = plugPag.doPayment(paymentData);
+
+                requireActivity().runOnUiThread(() -> {
+                    dialog.dismiss();
+                    if (result.getResult() == PlugPag.RET_OK) {
+                        processarSaidaFinal(valor, formaPagamento);
+                    } else {
+                        mostrarMensagem("Erro no Pagamento", result.getMessage() + " (" + result.getErrorCode() + ")");
+                    }
+                });
+            } catch (Exception e) {
+                requireActivity().runOnUiThread(() -> {
+                    dialog.dismiss();
+                    mostrarMensagem("Erro SmartPOS", "Falha ao comunicar com o PlugPag: " + e.getMessage());
+                });
+            }
+        }).start();
     }
 
     private void requisitarPixDinamico(double valor, String placa, String forma) {
@@ -488,10 +544,10 @@ public class SaidaFragment extends Fragment {
         viewModel.registrarSaida(veiculoAtual.getPlaca(), valorPago, formaPagamento);
     }
 
-    private void mostrarDialogoComprovante(Transacao t, String placa, double troco, String forma) {
+    private void mostrarDialogoComprovante(Transacao t, String placa, double troco, String forma, String cpfCnpj) {
         String operador = SessaoManager.getInstance().getPerfil().name();
         String comprovante = ComprovanteBuilder.buildText(placa, t.getHoraEntrada(),
-                t.getHoraSaida(), t.getValorPago(), tarifaAtual, troco, forma, operador);
+                t.getHoraSaida(), t.getValorPago(), tarifaAtual, troco, forma, operador, cpfCnpj);
 
         new MaterialAlertDialogBuilder(requireContext())
                 .setTitle("Comprovante")
@@ -499,12 +555,22 @@ public class SaidaFragment extends Fragment {
                 .setPositiveButton("Compartilhar", (d, w) -> {
                     Uri pdfUri = ComprovanteBuilder.gerarPdf(requireContext(), placa,
                             t.getHoraEntrada(), t.getHoraSaida(),
-                            t.getValorPago(), tarifaAtual, troco, forma, operador);
+                            t.getValorPago(), tarifaAtual, troco, forma, operador, cpfCnpj);
                     if (pdfUri != null) {
                         ComprovanteBuilder.compartilharPdf(requireContext(), pdfUri);
                     }
                 })
-                .setNeutralButton("Imprimir", (d, w) -> mostrarDispositivosBluetooth(comprovante))
+                .setNeutralButton("Imprimir", (d, w) -> {
+                    new MaterialAlertDialogBuilder(requireContext())
+                        .setTitle("Imprimir")
+                        .setItems(new String[]{"SmartPOS (Maquininha)", "Bluetooth Externa"}, (dialog, which) -> {
+                            if (which == 0) {
+                                ComprovanteBuilder.imprimirSmartPos(requireContext(), comprovante);
+                            } else {
+                                mostrarDispositivosBluetooth(comprovante);
+                            }
+                        }).show();
+                })
                 .setNegativeButton("Fechar", null)
                 .show();
     }

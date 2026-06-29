@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Park \' 31</string>
+    <string name="app_name">park\'31</string>
     <string name="app_tagline">Gestão de Estacionamento Profissional</string>
 
     <!-- Bottom Nav -->
@@ -11,7 +11,7 @@
     <string name="nav_mais">Mais</string>
 
     <!-- Titles -->
-    <string name="title_dashboard">Park \' 31</string>
+    <string name="title_dashboard">park\'31</string>
     <string name="title_entrada">Registrar Entrada</string>
     <string name="title_saida">Registrar Saída</string>
     <string name="title_listar">Veículos no Pátio</string>

@@ -205,6 +205,9 @@ public class EstacionamentoRepository {
     public LiveData<List<Transacao>> getAllTransacoes() { return dao.getAllTransacoes(); }
     public LiveData<Double> getReceitaTotal() { return dao.getReceitaTotal(); }
     public LiveData<Integer> getTotalAtendidos() { return dao.getTotalAtendidos(); }
+    
+    public LiveData<Double> getReceitaTotalDia(long inicioDia) { return dao.getReceitaTotalDia(inicioDia); }
+    public LiveData<Integer> getTotalAtendidosDia(long inicioDia) { return dao.getTotalAtendidosDia(inicioDia); }
     public LiveData<List<Vaga>> getAllVagas() { 
         executorService.execute(vagaDao::limparVagasOrfas);
         return vagaDao.getAll(); 
