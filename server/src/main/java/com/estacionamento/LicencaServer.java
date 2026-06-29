@@ -2178,9 +2178,15 @@ public class LicencaServer {
         sb.append("                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Admin-Token': cachedToken },\n");
         sb.append("                body: 'hardwareId=' + encodeURIComponent(hwid) + '&nomeCliente=' + encodeURIComponent(nome) + '&tarifaHora=' + encodeURIComponent(tarifa) + '&vagasCarro=' + encodeURIComponent(vagasCarro) + '&vagasMoto=' + encodeURIComponent(vagasMoto)\n");
         sb.append("            }).then(() => {\n");
+        sb.append("                return fetch('/api/send-config', {\n");
+        sb.append("                    method: 'POST',\n");
+        sb.append("                    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Admin-Token': cachedToken },\n");
+        sb.append("                    body: 'hardwareId=' + encodeURIComponent(hwid)\n");
+        sb.append("                });\n");
+        sb.append("            }).then(() => {\n");
         sb.append("                fecharModais();\n");
         sb.append("                carregarTerminais();\n");
-        sb.append("                mostrarToast('Configurações salvas e pendentes para envio ao terminal.');\n");
+        sb.append("                mostrarToast('Configurações salvas e aplicadas no terminal!');\n");
         sb.append("            });\n");
         sb.append("        }\n");
         sb.append("\n");
