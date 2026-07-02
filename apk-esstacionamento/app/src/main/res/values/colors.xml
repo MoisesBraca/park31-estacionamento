@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- New Midnight Palette (Enterprise Look) -->
+    <color name="primary">#38BDF8</color> <!-- Sky Blue -->
+    <color name="primary_variant">#0EA5E9</color>
+    <color name="primary_dark">#020617</color>
+    <color name="secondary">#818CF8</color>
+    <color name="accent">#F472B6</color>
+
+    <color name="success">#22C55E</color>
+    <color name="danger">#EF4444</color>
+    <color name="warning">#F59E0B</color>
+
+    <!-- Deep Backgrounds -->
+    <color name="background">#0F172A</color> <!-- Midnight Blue -->
+    <color name="surface">#1E293B</color>    <!-- Slate Blue (Cards) -->
+    <color name="surface_variant">#334155</color>
+
+    <!-- Text and Contrast -->
+    <color name="on_primary">#FFFFFF</color>
+    <color name="on_surface">#F8FAFC</color> <!-- High contrast text -->
+    <color name="text_secondary">#94A3B8</color> <!-- Muted text -->
+    <color name="text_hint">#475569</color>
+    <color name="divider">#334155</color>
+
+    <!-- Dashboard Colors (Dark Mode Optimized) -->
+    <color name="dash_blue">#1E3A8A</color>
+    <color name="dash_green">#064E3B</color>
+    <color name="dash_red">#7F1D1D</color>
+    <color name="dash_purple">#4C1D95</color>
+    <color name="dash_yellow_value">#FBBF24</color>
+    <color name="dash_green_value">#34D399</color>
+</resources>

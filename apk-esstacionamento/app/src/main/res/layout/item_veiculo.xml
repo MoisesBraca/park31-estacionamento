@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginHorizontal="16dp"
+    android:layout_marginVertical="8dp"
+    app:cardCornerRadius="20dp"
+    app:cardElevation="0dp"
+    app:cardBackgroundColor="@color/surface"
+    app:strokeWidth="0dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="20dp"
+        android:gravity="center_vertical">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/item_veiculo_placa"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ABC-1234"
+                android:textSize="20sp"
+                android:fontFamily="sans-serif-black"
+                android:textColor="@color/on_surface" />
+
+            <TextView
+                android:id="@+id/item_veiculo_entrada"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Entrada: 10:30"
+                android:textSize="13sp"
+                android:textColor="@color/text_secondary" />
+
+            <TextView
+                android:id="@+id/item_veiculo_servico"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="Lavagem: Simples"
+                android:textSize="12sp"
+                android:textColor="@color/primary"
+                android:fontFamily="sans-serif-black"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="end">
+
+            <TextView
+                android:id="@+id/item_veiculo_tempo"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="45 min"
+                android:textSize="14sp"
+                android:textColor="@color/primary"
+                android:fontFamily="sans-serif-black"
+                android:background="@drawable/bg_badge"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="6dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_concluir_lavagem"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Concluir"
+                android:textSize="11sp"
+                android:visibility="gone"
+                app:icon="@android:drawable/checkbox_on_background"
+                app:iconSize="14dp" />
+
+            <TextView
+                android:id="@+id/tv_lavagem_ok"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="CONCLUÍDO"
+                android:textSize="11sp"
+                android:textColor="@color/success"
+                android:fontFamily="sans-serif-black"
+                android:layout_marginTop="8dp"
+                android:visibility="gone" />
+        </LinearLayout>
+
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>

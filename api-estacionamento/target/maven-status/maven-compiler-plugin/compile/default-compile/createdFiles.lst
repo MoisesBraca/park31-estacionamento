@@ -1,0 +1,16 @@
+com\estacionamento\service\CalculadoraTarifa.class
+com\estacionamento\controller\TarifaController.class
+com\estacionamento\dto\EntradaRequest.class
+com\estacionamento\controller\VeiculoController.class
+com\estacionamento\config\CorsConfig.class
+com\estacionamento\controller\RelatorioController.class
+com\estacionamento\controller\TransacaoController.class
+com\estacionamento\model\Veiculo.class
+com\estacionamento\repository\TransacaoRepository.class
+com\estacionamento\dto\SaidaRequest.class
+com\estacionamento\dto\SaidaResponse.class
+com\estacionamento\dto\RelatorioResponse.class
+com\estacionamento\model\Transacao.class
+com\estacionamento\EstacionamentoApplication.class
+com\estacionamento\repository\VeiculoRepository.class
+com\estacionamento\service\EstacionamentoService.class

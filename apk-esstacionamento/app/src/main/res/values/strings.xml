@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">park\'31</string>
+    <string name="app_tagline">Gestão de Estacionamento Profissional</string>
+
+    <!-- Bottom Nav -->
+    <string name="nav_dashboard">Início</string>
+    <string name="nav_entrada">Entrada</string>
+    <string name="nav_saida">Saída</string>
+    <string name="nav_vagas">Vagas</string>
+    <string name="nav_mais">Mais</string>
+
+    <!-- Titles -->
+    <string name="title_dashboard">park\'31</string>
+    <string name="title_entrada">Registrar Entrada</string>
+    <string name="title_saida">Registrar Saída</string>
+    <string name="title_listar">Veículos no Pátio</string>
+    <string name="title_historico">Histórico</string>
+    <string name="title_relatorio">Relatório</string>
+    <string name="title_tarifa">Tarifas e Preços</string>
+    <string name="title_configuracao">Backup &amp; Restaurar</string>
+
+    <string name="placa_hint">Ex: ABC-1234</string>
+    <string name="btn_registrar_entrada">Registrar Entrada</string>
+    <string name="btn_buscar">Buscar Veículo</string>
+    <string name="btn_confirmar_saida">Confirmar Saída</string>
+    <string name="btn_alterar_tarifa">Alterar Tarifa</string>
+
+    <string name="vagas_ocupadas">Vagas Ocupadas</string>
+    <string name="total_atendidos">Total Atendidos</string>
+    <string name="receita_total">Receita Total</string>
+    <string name="tarifa_hora">Tarifa / Hora</string>
+
+    <string name="placa">Placa</string>
+    <string name="entrada">Entrada</string>
+    <string name="saida">Saída</string>
+    <string name="tempo">Tempo</string>
+    <string name="tarifa">Tarifa</string>
+    <string name="valor_pago">Valor Pago</string>
+    <string name="valor_recebido">Valor Recebido</string>
+    <string name="sem_veiculos">Nenhum veículo estacionado</string>
+    <string name="sem_transacoes">Nenhuma transação registrada</string>
+
+    <string name="sucesso_entrada">Entrada registrada com sucesso!</string>
+    <string name="sucesso_saida">Saída registrada com sucesso!</string>
+    <string name="sucesso_tarifa">Tarifa alterada com sucesso!</string>
+    <string name="erro_placa_vazia">Informe a placa do veículo</string>
+    <string name="erro_veiculo_nao_encontrado">Veículo não encontrado</string>
+    <string name="erro_pagamento_insuficiente">Pagamento insuficiente</string>
+    <string name="erro_valor_invalido">Valor inválido</string>
+    <string name="veiculo_ja_estacionado">Veículo já está estacionado</string>
+    <string name="historico">Histórico</string>
+    <string name="relatorio">Relatório</string>
+    <string name="alterar_tarifa">Alterar Tarifa</string>
+</resources>

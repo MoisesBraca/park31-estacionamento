@@ -1,0 +1,17 @@
+.gradle/
+build/
+*.jar
+*.class
+local.properties
+.idea/
+.vscode/
+bin/
+*.iml
+.DS_Store
+Thumbs.db
+*.apk
+*.aab
+server/build/
+/gradle/
+/gradlew
+/gradlew.bat

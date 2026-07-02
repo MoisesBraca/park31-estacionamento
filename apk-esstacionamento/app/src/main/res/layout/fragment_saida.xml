@@ -1,0 +1,275 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/title_saida"
+            android:textSize="28sp"
+            android:textColor="@color/on_surface"
+            android:fontFamily="sans-serif-black"
+            android:layout_marginBottom="24dp" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="0dp"
+            app:strokeWidth="1dp"
+            app:strokeColor="@color/divider">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp">
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    app:hintEnabled="false"
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/et_saida_placa"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_plate"
+                        android:textColor="#0E1726"
+                        android:inputType="textCapCharacters"
+                        android:maxLines="1"
+                        android:textSize="24sp"
+                        android:fontFamily="sans-serif-black"
+                        android:gravity="center"
+                        android:hint="PLACA-BR"
+                        android:textColorHint="#94A3B8"
+                        android:padding="12dp" />
+
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_saida_buscar"
+                    android:layout_width="match_parent"
+                    android:layout_height="60dp"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/btn_buscar"
+                    android:textSize="16sp"
+                    android:textAllCaps="false"
+                    app:cornerRadius="12dp" />
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/card_saida_detalhes"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:visibility="gone"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="4dp"
+            app:cardBackgroundColor="@color/surface">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Resumo da Estadia"
+                    android:textSize="18sp"
+                    android:textColor="@color/primary"
+                    android:fontFamily="sans-serif-black"
+                    android:layout_marginBottom="16dp" />
+
+                <include layout="@layout/layout_detail_row" android:id="@+id/row_placa" />
+                <include layout="@layout/layout_detail_row" android:id="@+id/row_entrada" />
+                <include layout="@layout/layout_detail_row" android:id="@+id/row_tempo" />
+                <include layout="@layout/layout_detail_row" android:id="@+id/row_valor" />
+
+                <TextView
+                    android:id="@+id/tv_mensalista_saida_badge"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:visibility="gone"
+                    android:background="@android:color/holo_green_dark"
+                    android:textColor="@android:color/white"
+                    android:text="MENSALISTA"
+                    android:textSize="15sp"
+                    android:fontFamily="sans-serif-black"
+                    android:gravity="center"
+                    android:padding="12dp" />
+
+                <!-- Bloco de Exibição de Vistoria de Avarias -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/card_saida_avaria"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    app:cardCornerRadius="8dp"
+                    app:cardElevation="0dp"
+                    app:strokeWidth="1dp"
+                    app:strokeColor="@color/divider"
+                    android:visibility="gone">
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="8dp">
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Foto da Vistoria de Entrada"
+                            android:textSize="12sp"
+                            android:layout_marginBottom="4dp" />
+                        <ImageView
+                            android:id="@+id/iv_saida_avaria"
+                            android:layout_width="match_parent"
+                            android:layout_height="150dp"
+                            android:scaleType="centerCrop" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="@color/divider"
+                    android:layout_marginVertical="20dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Pagamento"
+                    android:textSize="16sp"
+                    android:textColor="@color/on_surface"
+                    android:fontFamily="sans-serif-medium"
+                    android:layout_marginBottom="12dp" />
+
+                <RadioGroup
+                    android:id="@+id/rg_pagamento"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center"
+                    android:layout_marginBottom="20dp">
+
+                    <RadioButton
+                        android:id="@+id/rb_dinheiro"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
+                        android:button="@null"
+                        android:background="@drawable/selector_payment_chip"
+                        android:textColor="@color/selector_payment_text_color"
+                        android:gravity="center"
+                        android:text="Dinheiro"
+                        android:checked="true"
+                        android:layout_marginEnd="4dp"
+                        android:layout_marginStart="4dp"
+                        android:fontFamily="sans-serif-medium" />
+
+                    <RadioButton
+                        android:id="@+id/rb_cartao"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
+                        android:button="@null"
+                        android:background="@drawable/selector_payment_chip"
+                        android:textColor="@color/selector_payment_text_color"
+                        android:gravity="center"
+                        android:text="Cartão"
+                        android:layout_marginEnd="4dp"
+                        android:layout_marginStart="4dp"
+                        android:fontFamily="sans-serif-medium" />
+
+                    <RadioButton
+                        android:id="@+id/rb_pix"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
+                        android:button="@null"
+                        android:background="@drawable/selector_payment_chip"
+                        android:textColor="@color/selector_payment_text_color"
+                        android:gravity="center"
+                        android:text="Pix"
+                        android:layout_marginEnd="4dp"
+                        android:layout_marginStart="4dp"
+                        android:fontFamily="sans-serif-medium" />
+
+                    <RadioButton
+                        android:id="@+id/rb_nfc"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
+                        android:button="@null"
+                        android:background="@drawable/selector_payment_chip"
+                        android:textColor="@color/selector_payment_text_color"
+                        android:gravity="center"
+                        android:text="NFC"
+                        android:visibility="gone"
+                        android:layout_marginEnd="4dp"
+                        android:layout_marginStart="4dp"
+                        android:fontFamily="sans-serif-medium" />
+                </RadioGroup>
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="CPF/CNPJ na Nota (Opcional)"
+                    android:layout_marginBottom="12dp"
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/et_saida_cpf"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="number"
+                        android:textSize="18sp" />
+
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="Valor Recebido (R$)"
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/et_saida_valor"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="numberDecimal"
+                        android:textSize="18sp" />
+
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_saida_confirmar"
+                    android:layout_width="match_parent"
+                    android:layout_height="60dp"
+                    android:layout_marginTop="20dp"
+                    android:text="Finalizar e Liberar"
+                    android:textSize="18sp"
+                    android:textAllCaps="false"
+                    app:cornerRadius="12dp"
+                    app:backgroundTint="@color/success" />
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+    </LinearLayout>
+</ScrollView>

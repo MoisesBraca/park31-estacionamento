@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/nav_dashboard">
+
+    <fragment
+        android:id="@+id/nav_dashboard"
+        android:name="com.estacionamento.DashboardFragment"
+        android:label="Park ' 31"
+        tools:layout="@layout/fragment_dashboard" />
+
+    <fragment
+        android:id="@+id/nav_entrada"
+        android:name="com.estacionamento.EntradaFragment"
+        android:label="Entrada"
+        tools:layout="@layout/fragment_entrada" />
+
+    <fragment
+        android:id="@+id/nav_saida"
+        android:name="com.estacionamento.SaidaFragment"
+        android:label="Saída"
+        tools:layout="@layout/fragment_saida" />
+
+    <fragment
+        android:id="@+id/nav_vagas"
+        android:name="com.estacionamento.VagasFragment"
+        android:label="Vagas"
+        tools:layout="@layout/fragment_vagas" />
+
+    <fragment
+        android:id="@+id/nav_listar"
+        android:name="com.estacionamento.ListarFragment"
+        android:label="Lista"
+        tools:layout="@layout/fragment_listar" />
+
+    <fragment
+        android:id="@+id/nav_historico"
+        android:name="com.estacionamento.HistoricoFragment"
+        android:label="Histórico"
+        tools:layout="@layout/fragment_historico" />
+
+    <fragment
+        android:id="@+id/nav_relatorio"
+        android:name="com.estacionamento.RelatorioFragment"
+        android:label="Relatório"
+        tools:layout="@layout/fragment_relatorio" />
+
+    <fragment
+        android:id="@+id/nav_tarifa"
+        android:name="com.estacionamento.TarifaFragment"
+        android:label="Tarifa"
+        tools:layout="@layout/fragment_tarifa" />
+
+    <fragment
+        android:id="@+id/nav_ocr"
+        android:name="com.estacionamento.OcrFragment"
+        android:label="Leitor de Placa"
+        tools:layout="@layout/fragment_ocr_camera" />
+
+    <fragment
+        android:id="@+id/nav_configuracao"
+        android:name="com.estacionamento.ConfiguracaoFragment"
+        android:label="Configurações"
+        tools:layout="@layout/fragment_configuracao" />
+
+    <fragment
+        android:id="@+id/nav_graficos"
+        android:name="com.estacionamento.GraficosFragment"
+        android:label="Gráficos"
+        tools:layout="@layout/fragment_graficos" />
+
+</navigation>
